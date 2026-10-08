@@ -68,6 +68,8 @@ namespace Weland
             transparentLineColor.Rgba = ToGDK(a.transparentLineColor);
             impassableLineColor.Rgba = ToGDK(a.impassableLineColor);
             selectionColor.Rgba = ToGDK(a.selectedLineColor);
+            hoverColor.Rgba = ToGDK(a.hoverColor);
+            polygonHoverColor.Rgba = ToGDK(a.polygonHoverColor);
             playerColor.Rgba = ToGDK(a.playerColor);
             monsterColor.Rgba = ToGDK(a.monsterColor);
             civilianColor.Rgba = ToGDK(a.civilianColor);
@@ -128,6 +130,8 @@ namespace Weland
                 area.transparentLineColor = FromGDK(transparentLineColor.Rgba);
                 area.impassableLineColor = FromGDK(impassableLineColor.Rgba);
                 area.selectedLineColor = FromGDK(selectionColor.Rgba);
+                area.hoverColor = FromGDK(hoverColor.Rgba);
+                area.polygonHoverColor = FromGDK(polygonHoverColor.Rgba);
                 area.playerColor = FromGDK(playerColor.Rgba);
                 area.monsterColor = FromGDK(monsterColor.Rgba);
                 area.civilianColor = FromGDK(civilianColor.Rgba);
@@ -224,6 +228,8 @@ namespace Weland
         [Widget] ColorButton transparentLineColor;
         [Widget] ColorButton impassableLineColor;
         [Widget] ColorButton selectionColor;
+        [Widget] ColorButton hoverColor;
+        [Widget] ColorButton polygonHoverColor;
         [Widget] ColorButton playerColor;
         [Widget] ColorButton monsterColor;
         [Widget] ColorButton civilianColor;

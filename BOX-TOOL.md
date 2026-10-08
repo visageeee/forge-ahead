@@ -43,19 +43,21 @@ behavior. Use Shift-drag to start a selection box inside a polygon.
 
 # Inset Boxes
 
-Draw a box strictly inside an existing normal, axis-aligned rectangular polygon
-to partition it into five connected polygons: the inset center plus top, bottom,
-left, and right sections. Shared edges are reused or split without duplicates.
+Draw a box inside an existing normal polygon, including along its edges or corners, to partition it into the
+inset center and connected surrounding polygons. Axis-aligned rectangles use
+up to five regions (center, top, bottom, left and right), skipping empty regions; other outlines use convex
+regions around the center. Adjacent pieces merge whenever their union remains
+convex and fits the eight-vertex limit, eliminating unnecessary diagonals. Shared edges are reused or split without duplicates.
 The center keeps the original polygon index and is selected after creation.
-All five regions retain the original floor/ceiling textures, origins, heights,
+All regions retain the original floor/ceiling textures, origins, heights,
 lighting, media, and sound settings. Boundary wall textures and neighboring
 connections are preserved. Objects and annotations are reassigned to their
 containing region. The entire partition is one undo/redo action.
 
-This first version requires the inset to be fully inside the outer rectangle.
-Nonrectangular polygons, special polygon types such as platforms, hidden
-containers, internal stray geometry, and splits exceeding polygon limits are
-rejected. The existing map is unchanged when placement is rejected.
+The inset must stay within one outer polygon, but may share its edges or corners. Triangles, rotated shapes,
+Circle-tool polygons, and irregular outlines are supported. Special polygon
+types such as platforms, hidden containers, internal stray geometry, and splits
+exceeding map limits are rejected. Boxes crossing existing walls remain blocked. The existing map is unchanged when placement is rejected.
 
 # Circle Tool
 
@@ -97,3 +99,32 @@ Right-click and drag anywhere in the map to move the current selection using
 the Move tool's snapping and undo behavior. The active tool and selection stay
 unchanged. An empty selection does nothing. Middle-button dragging still pans;
 Alt-click remains available for picking paint values and alternate selection.
+
+## Select hover and polygon groups
+
+With Select active, moving the pointer previews the vertex, line or polygon
+that a normal click will select in cyan. Hovering does not change the map or
+selection. Leaving the map or changing tools clears the preview.
+
+Shift-click toggles polygons as well as vertices and lines. Clicking inside an
+already selected polygon keeps the group for dragging. Move, right-drag and
+arrow-key nudging translate selected polygons together, including their objects
+and annotations; shared vertices move once. Delete removes selected polygons
+while keeping their boundary lines, as for single-polygon deletion. All group
+edits support undo. Shift-drag still adds enclosed vertices and lines.
+
+Preferences → Colors now includes **Hover Highlight Color**. It controls Select
+hover previews for vertices, lines and polygons (polygon fills blend the hover
+color with the normal polygon color). OK applies and saves it; Cancel keeps the
+current color, and Reset Colors restores the default cyan.
+
+Polygon hover now has its own **Polygon Hover Color** in Preferences → Colors.
+The existing picker is labeled **Vertex/Line Hover Color**. Polygon previews use
+the chosen polygon color directly. Both settings save on OK and reset with
+Reset Colors; the previous polygon hover appearance is preserved until you
+choose a separate color.
+
+Edge and corner insets reuse perimeter vertices and lines. A box spanning the
+full width or height can divide the surrounding area into disconnected regions;
+each region is filled with valid convex polygons. Boxes extending outside the
+container or crossing into neighboring polygons remain blocked.

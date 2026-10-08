@@ -5,6 +5,36 @@ namespace Weland
 {
     public partial class Editor
     {
+        public Selection Hover { get; } = new Selection();
+
+        Selection PickSelection(short X, short Y)
+        {
+            var hit = new Selection();
+            Point p = new Point(X, Y);
+            hit.Point = ClosestPoint(p);
+            if (hit.Point != -1) return hit;
+            hit.Object = ClosestObject(p);
+            if (hit.Object != -1) return hit;
+            hit.Annotation = ClosestAnnotation(p);
+            if (hit.Annotation != -1) return hit;
+            hit.Line = ClosestLine(p);
+            if (hit.Line != -1) return hit;
+            short polygon = Level.GetEnclosingPolygon(p);
+            if (polygon != -1 && Level.Filter(Level.Polygons[polygon])) hit.Polygon = polygon;
+            return hit;
+        }
+
+        public bool UpdateHover(short X, short Y)
+        {
+            var hit = Tool == Tool.Select ? PickSelection(X, Y) : new Selection();
+            if (Hover.Point == hit.Point && Hover.Line == hit.Line && Hover.Polygon == hit.Polygon &&
+                Hover.Object == hit.Object && Hover.Annotation == hit.Annotation) return false;
+            Hover.CopyFrom(hit);
+            return true;
+        }
+
+        public void ClearHover() { Hover.Clear(); }
+
         public bool DrawingSelectionBox { get; private set; }
         public Point SelectionBoxStart { get; private set; }
         public Point SelectionBoxEnd { get; private set; }
@@ -28,7 +58,8 @@ namespace Weland
             undoSet = false;
             groupMovedX = groupMovedY = 0;
             Point p = new Point(X, Y);
-            short point = ClosestPoint(p), line = ClosestLine(p);
+            Selection hit = PickSelection(X, Y);
+            short point = hit.Point, line = hit.Line, polygon = hit.Polygon;
             beforeSelectionBox = new Selection();
             beforeSelectionBox.CopyFrom(Selection);
             additiveSelectionBox = additive;
@@ -46,11 +77,16 @@ namespace Weland
                 {
                     if (!Selection.Lines.Add(line)) Selection.Lines.Remove(line);
                 }
+                else if (polygon != -1)
+                {
+                    if (!Selection.Polygons.Add(polygon)) Selection.Polygons.Remove(polygon);
+                }
                 pendingSelectionBox = true;
             }
             else if (Selection.HasMultipleGeometry &&
                 ((point != -1 && Selection.Points.Contains(point)) ||
                  (line != -1 && Selection.Lines.Contains(line)) ||
+                 (polygon != -1 && Selection.Polygons.Contains(polygon)) ||
                  (point != -1 && MultipleEndpoints().Contains(point))))
             {
                 // Pressing selected geometry keeps the group for dragging.
@@ -68,6 +104,7 @@ namespace Weland
         {
             if (Selection.Point != -1) Selection.Points.Add(Selection.Point);
             if (Selection.Line != -1) Selection.Lines.Add(Selection.Line);
+            if (Selection.Polygon != -1) Selection.Polygons.Add(Selection.Polygon);
             Selection.Point = Selection.Line = Selection.Object = Selection.Polygon = Selection.Annotation = -1;
         }
 
@@ -131,6 +168,11 @@ namespace Weland
             var points = new HashSet<short>(Selection.Points);
             foreach (short index in Selection.Lines)
                 foreach (short endpoint in Level.Lines[index].EndpointIndexes) points.Add(endpoint);
+            foreach (short index in Selection.Polygons)
+            {
+                Polygon polygon = Level.Polygons[index];
+                for (int i = 0; i < polygon.VertexCount; ++i) points.Add(polygon.EndpointIndexes[i]);
+            }
             return points;
         }
 
@@ -151,7 +193,21 @@ namespace Weland
                 dx = Math.Max(short.MinValue - p.X, Math.Min(short.MaxValue - p.X, dx));
                 dy = Math.Max(short.MinValue - p.Y, Math.Min(short.MaxValue - p.Y, dy));
             }
+            var objects = Level.Objects.FindAll(obj => Selection.Polygons.Contains(obj.PolygonIndex));
+            var notes = Level.Annotations.FindAll(note => Selection.Polygons.Contains(note.PolygonIndex));
+            foreach (MapObject obj in objects)
+            {
+                dx = Math.Max(short.MinValue - obj.X, Math.Min(short.MaxValue - obj.X, dx));
+                dy = Math.Max(short.MinValue - obj.Y, Math.Min(short.MaxValue - obj.Y, dy));
+            }
+            foreach (Annotation note in notes)
+            {
+                dx = Math.Max(short.MinValue - note.X, Math.Min(short.MaxValue - note.X, dx));
+                dy = Math.Max(short.MinValue - note.Y, Math.Min(short.MaxValue - note.Y, dy));
+            }
             foreach (short index in points) TranslatePoint(index, dx, dy);
+            foreach (MapObject obj in objects) TranslateObject(obj, dx, dy);
+            foreach (Annotation note in notes) TranslateAnnotation(note, dx, dy);
             if (dx != 0 || dy != 0) Changed = true;
             Dirty = RedrawAll = true;
         }
@@ -176,6 +232,9 @@ namespace Weland
         void DeleteMultiple()
         {
             SetUndo();
+            ClearHover();
+            var polygons = new List<Polygon>();
+            foreach (short index in Selection.Polygons) polygons.Add(Level.Polygons[index]);
             var coordinates = new HashSet<Point>();
             foreach (short index in Selection.Points) coordinates.Add(Level.Endpoints[index]);
             var lines = new HashSet<Line>();
@@ -191,6 +250,11 @@ namespace Weland
             }
             for (int i = Level.Endpoints.Count - 1; i >= 0; --i)
                 if (coordinates.Contains(Level.Endpoints[i])) Level.DeletePoint((short)i);
+            foreach (Polygon polygon in polygons)
+            {
+                int index = Level.Polygons.IndexOf(polygon);
+                if (index != -1) Level.DeletePolygon((short)index);
+            }
             Selection.Clear();
             Changed = Dirty = RedrawAll = true;
         }

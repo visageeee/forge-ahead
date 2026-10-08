@@ -24,6 +24,7 @@ namespace Weland
                 editor.CancelSelectionBox();
                 editor.CancelCircle();
                 editor.CancelMoveTool();
+                editor.ClearHover();
                 editor.Level = value;
             }
         }
@@ -118,6 +119,7 @@ namespace Weland
             drawingArea.Expand = true;
             drawingArea.ConfigureEvent += OnConfigure;
             drawingArea.MotionNotifyEvent += OnMotion;
+            drawingArea.LeaveNotifyEvent += (sender, args) => { editor.ClearHover(); Redraw(); };
             drawingArea.ButtonPressEvent += OnButtonPressed;
             drawingArea.ButtonReleaseEvent += OnButtonReleased;
             drawingArea.ScrollEvent += OnScroll;
@@ -125,6 +127,8 @@ namespace Weland
                 EventMask.ButtonPressMask |
                 EventMask.ButtonReleaseMask |
                 EventMask.ButtonMotionMask |
+                EventMask.PointerMotionMask |
+                EventMask.LeaveNotifyMask |
                 EventMask.ScrollMask;
 
             grid1.Attach(drawingArea, 0, 0, 1, 1);
@@ -308,7 +312,7 @@ namespace Weland
             }
             else if (selection.HasMultipleGeometry || editor.DrawingSelectionBox)
             {
-                statusbar.Push(id, String.Format("Selected: {0} vertices, {1} lines", selection.Points.Count, selection.Lines.Count));
+                statusbar.Push(id, String.Format("Selected: {0} vertices, {1} lines, {2} polygons", selection.Points.Count, selection.Lines.Count, selection.Polygons.Count));
             }
             else if (editor.Tool == Tool.Box && (editor.DrawingBox || editor.BoxMessage != null))
             {
@@ -729,7 +733,7 @@ namespace Weland
                 UpdateStatusBar();
                 args.RetVal = true;
             }
-            else if (editor.Tool == Tool.Pan || ((args.Event.State & ModifierType.Button2Mask) != 0))
+            else if ((editor.Tool == Tool.Pan && (args.Event.State & ModifierType.Button1Mask) != 0) || ((args.Event.State & ModifierType.Button2Mask) != 0))
             {
                 hscrollbar1.Value = xOffsetDown + (xDown - args.Event.X) / drawingArea.Transform.Scale;
                 vscrollbar1.Value = yOffsetDown + (yDown - args.Event.Y) / drawingArea.Transform.Scale;
@@ -739,6 +743,11 @@ namespace Weland
             {
                 editor.Motion(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y), Modifiers(args.Event.State));
                 RedrawDirty();
+            }
+
+            if ((args.Event.State & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask)) == 0)
+            {
+                if (editor.UpdateHover(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y))) Redraw();
             }
 
             if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Select || editor.Tool == Tool.Move)

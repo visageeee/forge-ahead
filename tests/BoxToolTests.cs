@@ -189,7 +189,8 @@ class BoxToolTests
         });
         Test("large coordinate ranges and narrow boxes", () => {
             var level = new Level(); Box(level,-30000,-30000,30000,30000);
-            level = new Level(); Box(level,0,0,1,100); Reject(level,0,1,1,99);
+            level = new Level(); Box(level,0,0,1,100); Box(level,0,1,1,99);
+            Check(level.Polygons.Count==3,"Narrow full-width inset did not split into three regions");
         });
         Test("selection box in both drag directions", () => {
             foreach (bool reverse in new[] {false,true}) {
@@ -456,6 +457,190 @@ class BoxToolTests
             Check(Snapshot(level)==before && !editor.DrawingBox,"Empty right drag created geometry");
             editor.ButtonPress(1500,1500,EditorModifiers.None);editor.ButtonRelease(1700,1700,EditorModifiers.None);
             Check(level.Polygons.Count==2,"Right release left move gesture active");
+        });
+        Test("hover matches point line polygon picking without selecting or editing", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Select;
+            string before=Snapshot(level);
+            foreach (Point p in new[] {P(0,0),P(500,0),P(500,500),P(1500,1500)}) {
+                editor.UpdateHover(p.X,p.Y);var hit=new Selection();hit.CopyFrom(editor.Hover);
+                Check(editor.Selection.Point==-1 && editor.Selection.Line==-1 && editor.Selection.Polygon==-1,"Hover changed selection");
+                editor.ButtonPress(p.X,p.Y,EditorModifiers.None);editor.ButtonRelease(p.X,p.Y,EditorModifiers.None);
+                Check(editor.Selection.Point==hit.Point && editor.Selection.Line==hit.Line && editor.Selection.Polygon==hit.Polygon,"Hover disagrees with click");
+                editor.Selection.Clear();
+            }
+            Check(Snapshot(level)==before && !editor.Changed,"Hover changed geometry");
+            editor.UpdateHover(500,500);editor.Tool=Tool.Pan;Check(editor.Hover.Polygon==-1,"Tool switch left hover");
+        });
+        Test("Shift-click toggles polygons and polygon groups drag with contents", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            level.NewObject(P(200,200),0);level.Annotations.Add(new Annotation{X=1200,Y=200,PolygonIndex=1,Text="note"});
+            var editor=Editor(level);editor.Tool=Tool.Select;
+            void Click(short x, EditorModifiers mods) {editor.ButtonPress(x,500,mods);editor.ButtonRelease(x,500,mods);}
+            Click(500,EditorModifiers.None);Click(1500,EditorModifiers.Shift);
+            Check(editor.Selection.Polygons.SetEquals(new short[]{0,1}),"Shift lost first polygon");
+            Click(1500,EditorModifiers.Shift);Check(editor.Selection.Polygons.SetEquals(new short[]{0}),"Shift did not toggle off");
+            Click(1500,EditorModifiers.Shift);
+            editor.ButtonPress(500,500,EditorModifiers.None);editor.Motion(520,530,EditorModifiers.None);editor.ButtonRelease(520,530,EditorModifiers.None);
+            Check(level.Endpoints.Contains(P(1020,30)) && !level.Endpoints.Contains(P(1040,60)),"Shared endpoints moved twice");
+            Check(level.Objects[0].X==220 && level.Annotations[0].X==1220,"Group contents stayed behind");
+            editor.Undo();Check(level.Endpoints.Contains(P(1000,0)) && level.Objects[0].X==200 && editor.Selection.Polygons.Count==2,"Polygon group undo failed");
+            editor.ButtonPress(3000,3000,EditorModifiers.RightClick);editor.ButtonRelease(3040,3050,EditorModifiers.RightClick);
+            Check(level.Objects[0].X==240 && level.Annotations[0].Y==250,"Right drag missed polygon contents");Validate(level);
+        });
+        Test("mixed polygon vertex selection nudges and deletes with undo", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var editor=Editor(level);editor.Tool=Tool.Select;
+            editor.ButtonPress(500,500,EditorModifiers.None);editor.ButtonRelease(500,500,EditorModifiers.None);
+            editor.ButtonPress(2000,0,EditorModifiers.Shift);editor.ButtonRelease(2000,0,EditorModifiers.Shift);
+            Check(editor.Selection.Polygons.Count==1 && editor.Selection.Points.Count==1,"Mixed selection failed");
+            editor.NudgeSelected(10,20);Check(level.Endpoints.Contains(P(10,20)) && level.Endpoints.Contains(P(2010,20)),"Mixed nudge failed");
+            editor.Undo();editor.Selection.Clear();editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            editor.DeleteSelected();Check(level.Polygons.Count==0 && level.Lines.Count==7,"Polygon group delete damaged boundary lines");
+            editor.Undo();Check(level.Polygons.Count==2 && editor.Selection.Polygons.Count==2,"Polygon deletion undo failed");Validate(level);
+        });
+        Test("hover and Shift polygon picks respect filtered polygons", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Level.Filter=p=>false;var editor=Editor(level);editor.Tool=Tool.Select;
+            editor.UpdateHover(500,500);Check(editor.Hover.Polygon==-1,"Hovered hidden polygon");
+            editor.ButtonPress(500,500,EditorModifiers.Shift);editor.ButtonRelease(500,500,EditorModifiers.Shift);
+            Check(editor.Selection.Polygons.Count==0,"Selected hidden polygon");Level.Filter=p=>true;
+        });
+        long Area2(Level level)
+        {
+            long total=0;
+            foreach(Polygon polygon in level.Polygons) {
+                long sum=0;for(int i=0;i<polygon.VertexCount;i++) {
+                    Point a=level.Endpoints[polygon.EndpointIndexes[i]],b=level.Endpoints[polygon.EndpointIndexes[(i+1)%polygon.VertexCount]];
+                    sum+=(long)a.X*b.Y-(long)a.Y*b.X;
+                }total+=Math.Abs(sum);
+            }return total;
+        }
+        Test("inset box partitions triangles rotated boxes and irregular polygons exactly", () => {
+            var outlines=new[] {
+                new[]{P(0,0),P(2000,0),P(1000,2000)},
+                new[]{P(0,1000),P(1000,0),P(2000,1000),P(1000,2000)},
+                new[]{P(0,400),P(800,0),P(2000,300),P(1900,1500),P(1100,2100),P(200,1800)}
+            };
+            foreach(var outline in outlines) {
+                var level=new Level();Check(level.CreateCirclePolygon(outline.ToList(),out string reason),reason);
+                long area=Area2(level);var endpoints=level.Endpoints.ToArray();var boundaries=level.Lines.ToArray();
+                Box(level,800,700,1200,1100);
+                Check(Area2(level)==area,"Inset left overlap or a gap");
+                Check(level.LastCreatedBoxPolygonIndex==0 && level.Polygons[0].VertexCount==4,"Inset index changed");
+                Check(endpoints.All(p=>level.Endpoints.Contains(p)) && boundaries.All(l=>level.Lines.Contains(l)),"Outer boundaries replaced");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            }
+        });
+        Test("insets inside 3 through 8 sided circles preserve geometry and undo", () => {
+            for(int sides=3;sides<=8;sides++) {
+                var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=sides;
+                editor.StartCircle(0,0);editor.FinishCircle(4000,4000,false);
+                long area=Area2(level);string before=CanonicalSnapshot(level);editor.Tool=Tool.Box;
+                editor.StartBox(1700,1700);editor.FinishBox(2300,2300);
+                Check(editor.BoxMessage==null && level.Polygons.Count>1,"Circle inset rejected: "+editor.BoxMessage);
+                Check(Area2(level)==area && editor.Selection.Polygon==0,"Circle inset area/index changed");Validate(level);
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Circle inset undo failed");
+                editor.Undo();Check(CanonicalSnapshot(level)==after,"Circle inset redo failed");
+            }
+        });
+        Test("nonrectangular inset preserves settings sides neighbors and object owners", () => {
+            var level=new Level();var outline=new[]{P(0,1000),P(1000,0),P(2000,1000),P(1000,2000)};
+            Check(level.CreateCirclePolygon(outline.ToList(),out string reason),reason);
+            Check(level.CreateCirclePolygon(new[]{P(1000,0),P(0,1000),P(-1000,0)}.ToList(),out reason),reason);
+            var neighbor=level.Polygons[1];neighbor.Type=PolygonType.Teleporter;neighbor.Permutation=0;
+            level.Polygons[0].FloorHeight=123;level.Polygons[0].FloorOrigin=P(21,42);
+            int wall=level.Lines.FindIndex(l=>l.ClockwisePolygonOwner==0 && l.CounterclockwisePolygonOwner==1);
+            Check(wall>=0,"No shared wall");var side=new Side{LineIndex=(short)wall,PolygonIndex=0};side.Primary.Texture=(ShapeDescriptor)1;side.Primary.X=33;
+            level.Sides.Add(side);level.Lines[wall].ClockwisePolygonSideIndex=0;
+            foreach(Point point in new[]{P(1000,1000),P(1000,200),P(1800,1000),P(1000,1800),P(200,1000)}) {
+                level.NewObject(point,0);level.Annotations.Add(new Annotation{X=point.X,Y=point.Y,PolygonIndex=0,Text="keep"});
+            }
+            long area=Area2(level);Box(level,800,800,1200,1200);
+            Check(Area2(level)==area && level.Polygons[1]==neighbor && neighbor.Permutation==0,"Neighbor changed");
+            Check(level.Sides.Count==1 && level.Sides[0].Primary.X==33 && level.Sides[0].Primary.Texture.Equals((ShapeDescriptor)1),"Perimeter texture lost");
+            foreach(MapObject obj in level.Objects)Check(obj.PolygonIndex==level.GetEnclosingPolygon(P(obj.X,obj.Y)),"Object ownership wrong");
+            foreach(Annotation note in level.Annotations)Check(note.PolygonIndex==level.GetEnclosingPolygon(P(note.X,note.Y)),"Note ownership wrong");
+            for(int i=0;i<level.Polygons.Count;i++)if(i!=1)Check(level.Polygons[i].FloorHeight==123 && level.Polygons[i].FloorOrigin.Equals(P(21,42)),"Settings lost");
+            Validate(level);
+        });
+        Test("nonrectangular inset rejects crossing walls and contained stray geometry atomically", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,1000),P(1000,0),P(2000,1000),P(1000,2000)}.ToList(),out string reason),reason);
+            Reject(level,100,100,800,800);
+            level.NewLine(level.NewPoint(500,500),level.NewPoint(700,600));Reject(level,800,800,1200,1200);
+        });
+        Test("inset handles concave outlines and extra collinear perimeter vertices", () => {
+            var outlines=new[] {
+                new[]{P(0,0),P(3000,0),P(3000,3000),P(2000,3000),P(2000,1000),P(1000,1000),P(1000,3000),P(0,3000)},
+                new[]{P(0,1000),P(500,500),P(1000,0),P(2000,1000),P(1000,2000)}
+            };
+            for(int shape=0;shape<outlines.Length;shape++) {
+                var level=new Level();var ids=outlines[shape].Select(p=>level.NewPoint(p.X,p.Y)).ToArray();
+                var edges=new short[ids.Length];
+                for(int i=0;i<ids.Length;i++)edges[i]=level.NewLine(ids[i],ids[(i+1)%ids.Length]);
+                // Model an existing/imported outline, including a concave one
+                // that the ordinary Fill tool intentionally does not generate.
+                var polygon=new Polygon{VertexCount=(ushort)ids.Length,Concave=shape==0};
+                level.Polygons.Add(polygon);
+                for(int i=0;i<ids.Length;i++) {
+                    polygon.EndpointIndexes[i]=ids[i];polygon.LineIndexes[i]=edges[(i+ids.Length-1)%ids.Length];
+                    level.Lines[edges[i]].ClockwisePolygonOwner=0;level.EndpointPolygons[ids[i]].Add(polygon);
+                }
+                long area=Area2(level);
+                if(shape==0) {
+                    Reject(level,800,800,2200,2200);
+                    Box(level,200,200,800,800);
+                }else Box(level,800,800,1200,1200);
+                Check(Area2(level)==area,"Outline area changed");Validate(level);
+            }
+        });
+        Test("skewed quadrilateral inset merges into four convex surrounding regions", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,300),P(2200,0),P(2200,1800),P(0,2100)}.ToList(),out string reason),reason);
+            long area=Area2(level);Box(level,400,600,1800,1400);
+            Check(level.Polygons.Count==5,"Unnecessary triangles remain: "+level.Polygons.Count);
+            Check(level.Polygons.All(p=>p.VertexCount==4),"Expected four surrounding quadrilaterals");
+            Check(level.Endpoints.Count==8 && level.Lines.Count==12,"Removed diagonals left stray geometry");
+            Check(Area2(level)==area,"Merging changed area");Validate(level);
+        });
+        Test("circle inset merges convex pieces without crossing the inset boundary", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=8;
+            editor.StartCircle(0,0);editor.FinishCircle(4000,4000,false);long area=Area2(level);
+            Box(level,1700,1700,2300,2300);
+            Check(level.Polygons.Count<13 && level.Polygons.Skip(1).Any(p=>p.VertexCount>3),"Circle inset still only triangles");
+            Check(level.Polygons[0].VertexCount==4 && Area2(level)==area,"Merge absorbed inset or changed area");
+            Check(level.Lines.All(l=>l.ClockwisePolygonOwner!=-1 || l.CounterclockwisePolygonOwner!=-1),"Stray triangulation diagonal");Validate(level);
+        });
+        Test("edge and corner box insets create only nonempty surrounding regions", () => {
+            foreach(var inset in new[]{new[]{0,200,600,800},new[]{200,0,800,600},new[]{0,0,600,600},new[]{400,400,1000,1000},new[]{0,200,1000,800},new[]{0,0,1000,600}}) {
+                var level=new Level();Box(level,0,0,1000,1000);long area=Area2(level);
+                Box(level,inset[0],inset[1],inset[2],inset[3]);
+                Check(level.Polygons.Count<=4 && Area2(level)==area,"Edge inset has extra regions or changed area");
+                Check(level.LastCreatedBoxPolygonIndex==0,"Edge inset lost original index");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            }
+        });
+        Test("inset can touch one or four diagonal polygon edges", () => {
+            foreach(var inset in new[]{new[]{500,500,1100,1100},new[]{500,500,1500,1500},new[]{500,600,1400,1500}}) {
+                var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,1000),P(1000,0),P(2000,1000),P(1000,2000)}.ToList(),out string reason),reason);
+                long area=Area2(level);Box(level,inset[0],inset[1],inset[2],inset[3]);
+                Check(Area2(level)==area,"Diagonal contact changed area");Validate(level);
+            }
+        });
+        Test("corner inset in triangle touches a horizontal outer edge", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,0),P(2000,0),P(1000,2000)}.ToList(),out string reason),reason);
+            long area=Area2(level);Box(level,500,0,1500,600);Check(Area2(level)==area,"Triangle edge inset changed area");Validate(level);
+        });
+        Test("shared-wall edge inset preserves neighbor textures objects and undo", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            int wall=level.Lines.FindIndex(l=>l.ClockwisePolygonOwner==0 && l.CounterclockwisePolygonOwner==1);
+            var inside=new Side{LineIndex=(short)wall,PolygonIndex=0};inside.Primary.Texture=(ShapeDescriptor)1;inside.Primary.X=10;
+            var outside=new Side{LineIndex=(short)wall,PolygonIndex=1};outside.Primary.Texture=(ShapeDescriptor)2;outside.Primary.X=20;
+            level.Sides.Add(inside);level.Sides.Add(outside);level.Lines[wall].ClockwisePolygonSideIndex=0;level.Lines[wall].CounterclockwisePolygonSideIndex=1;
+            level.NewObject(P(900,500),0);level.NewObject(P(400,500),0);
+            level.Annotations.Add(new Annotation{X=400,Y=100,PolygonIndex=0,Text="keep"});
+            string before=CanonicalSnapshot(level);var editor=Editor(level);editor.StartBox(600,200);editor.FinishBox(1000,800);
+            Check(editor.BoxMessage==null && level.Polygons.Count==5,"Shared-wall inset failed: "+editor.BoxMessage);
+            Check(level.Polygons[1].VertexCount==6 && level.Sides.Count==6,"Shared wall did not retain both texture sides");
+            Check(level.Objects[0].PolygonIndex==0 && level.Objects[1].PolygonIndex!=0 && level.Annotations[0].PolygonIndex!=0,"Edge inset content ownership wrong");
+            Validate(level);string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Edge inset undo failed");
+            editor.Undo();Check(CanonicalSnapshot(level)==after,"Edge inset redo failed");Validate(level);
         });
         Console.WriteLine(passed + " test groups passed.");
     }

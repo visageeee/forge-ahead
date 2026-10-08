@@ -204,7 +204,8 @@ namespace Weland
                     }
                     if (code == CohenSutherland.Inside && Filter(polygon))
                     {
-                        DrawPolygon((short)i, PolygonColor.Normal, cr);
+                        DrawPolygon((short)i, Selection.Polygons.Contains((short)i) ? PolygonColor.Selected :
+                            (Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Polygon == i ? PolygonColor.Hover : PolygonColor.Normal), cr);
                     }
                 }
 
@@ -255,7 +256,7 @@ namespace Weland
                     {
                         if (Level.FilterLine(Filter, line))
                         {
-                            DrawLine(line, Selection.Lines.Contains((short)lineIndex));
+                            DrawLine(line, Selection.Lines.Contains((short)lineIndex), Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Line == lineIndex);
                         }
                     }
                 }
@@ -270,6 +271,8 @@ namespace Weland
                     if (Level.FilterPoint(Filter, i) && Points[i] == CohenSutherland.Inside)
                     {
                         if (Selection.Points.Contains(i)) DrawFatPoint(selectedLineColor, Level.Endpoints[i]);
+                        else if (Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Point == i && Selection.Point != i)
+                            DrawFatPoint(hoverColor, Level.Endpoints[i]);
                         else DrawPoint(Level.Endpoints[i]);
                     }
                 }
@@ -583,7 +586,10 @@ namespace Weland
         }
 
 
-        void DrawLine(Line line, bool selected = false)
+        public Drawer.Color hoverColor;
+        public Drawer.Color polygonHoverColor;
+
+        void DrawLine(Line line, bool selected = false, bool hovered = false)
         {
             Point p1 = Level.Endpoints[line.EndpointIndexes[0]];
             Point p2 = Level.Endpoints[line.EndpointIndexes[1]];
@@ -592,6 +598,10 @@ namespace Weland
             if (selected || (Selection.Line != -1 && line == Level.Lines[Selection.Line]))
             {
                 color = selectedLineColor;
+            }
+            else if (hovered)
+            {
+                color = hoverColor;
             }
             else if (line.Transparent)
             {
@@ -614,7 +624,8 @@ namespace Weland
         {
             Normal,
             Selected,
-            Destination
+            Destination,
+            Hover
         }
 
         void DrawPolygon(short polygon_index, PolygonColor color, Cairo.Context cr)
@@ -674,6 +685,10 @@ namespace Weland
                 if (color == PolygonColor.Selected)
                 {
                     drawer.FillPolygon(selectedPolygonColor, points);
+                }
+                else if (color == PolygonColor.Hover)
+                {
+                    drawer.FillPolygon(polygonHoverColor, points);
                 }
                 else if (color == PolygonColor.Destination)
                 {
@@ -858,6 +873,8 @@ namespace Weland
             solidLineColor = new Drawer.Color(0, 0, 0);
             transparentLineColor = new Drawer.Color(0.2, 0.8, 0.8);
             selectedLineColor = new Drawer.Color(1, 1, 0);
+            hoverColor = new Drawer.Color(0.2, 0.8, 1.0);
+            polygonHoverColor = new Drawer.Color(0.535, 0.835, 0.935);
             selectedPolygonColor = new Drawer.Color((double)0xff / 0xff,
                                 (double)0xcc / 0xff,
                                 (double)0x66 / 0xff);
@@ -888,9 +905,14 @@ namespace Weland
             solidLineColor = LoadColor(colorsPrefix + "Line", solidLineColor);
             transparentLineColor = LoadColor(colorsPrefix + "TransparentLine", transparentLineColor);
             selectedLineColor = LoadColor(colorsPrefix + "Selection", selectedLineColor);
+            hoverColor = LoadColor(colorsPrefix + "Hover", hoverColor);
             selectedPolygonColor = LoadColor(colorsPrefix + "SelectedPolygon", selectedPolygonColor);
             destinationPolygonColor = LoadColor(colorsPrefix + "TargetPolygon", destinationPolygonColor);
             polygonColor = LoadColor(colorsPrefix + "Polygon", polygonColor);
+            // Preserve the previous hover fill until a separate color is saved.
+            polygonHoverColor = LoadColor(colorsPrefix + "PolygonHover", new Drawer.Color(
+                (polygonColor.R + hoverColor.R) / 2, (polygonColor.G + hoverColor.G) / 2,
+                (polygonColor.B + hoverColor.B) / 2));
             invalidPolygonColor = LoadColor(colorsPrefix + "InvalidPolygon", invalidPolygonColor);
             gridLineColor = LoadColor(colorsPrefix + "GridLine", gridLineColor);
             gridPointColor = LoadColor(colorsPrefix + "GridPoint", gridPointColor);
@@ -909,6 +931,8 @@ namespace Weland
             SaveColor(colorsPrefix + "Line", solidLineColor);
             SaveColor(colorsPrefix + "TransparentLine", transparentLineColor);
             SaveColor(colorsPrefix + "Selection", selectedLineColor);
+            SaveColor(colorsPrefix + "Hover", hoverColor);
+            SaveColor(colorsPrefix + "PolygonHover", polygonHoverColor);
             SaveColor(colorsPrefix + "SelectedPolygon", selectedPolygonColor);
             SaveColor(colorsPrefix + "TargetPolygon", destinationPolygonColor);
             SaveColor(colorsPrefix + "Polygon", polygonColor);

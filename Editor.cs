@@ -68,7 +68,8 @@ namespace Weland
         public short Annotation = -1;
         public HashSet<short> Points = new HashSet<short>();
         public HashSet<short> Lines = new HashSet<short>();
-        public bool HasMultipleGeometry => Points.Count != 0 || Lines.Count != 0;
+        public HashSet<short> Polygons = new HashSet<short>();
+        public bool HasMultipleGeometry => Points.Count != 0 || Lines.Count != 0 || Polygons.Count != 0;
 
         public void Clear()
         {
@@ -79,6 +80,7 @@ namespace Weland
             Annotation = -1;
             Points.Clear();
             Lines.Clear();
+            Polygons.Clear();
         }
 
         public void CopyFrom(Selection other)
@@ -90,6 +92,7 @@ namespace Weland
             Annotation = other.Annotation;
             Points = new HashSet<short>(other.Points);
             Lines = new HashSet<short>(other.Lines);
+            Polygons = new HashSet<short>(other.Polygons);
         }
     }
 
@@ -119,6 +122,7 @@ namespace Weland
                 CancelSelectionBox();
                 CancelCircle();
                 CancelMoveTool();
+                ClearHover();
                 tool = value;
                 if (Level.TemporaryLineStartIndex != -1)
                 {
@@ -633,46 +637,8 @@ namespace Weland
 
         void SelectSingle(short X, short Y)
         {
-            Selection.Clear();
-            Point p = new Point(X, Y);
-            short index = ClosestPoint(p);
-            if (index != -1)
-            {
-                Selection.Point = index;
-            }
-            else
-            {
-                index = ClosestObject(p);
-                if (index != -1)
-                {
-                    Selection.Object = index;
-                    lastObject = Level.Objects[index];
-                }
-                else
-                {
-                    index = ClosestAnnotation(p);
-                    if (index != -1)
-                    {
-                        Selection.Annotation = index;
-                    }
-                    else
-                    {
-                        index = ClosestLine(p);
-                        if (index != -1)
-                        {
-                            Selection.Line = index;
-                        }
-                        else
-                        {
-                            index = Level.GetEnclosingPolygon(p);
-                            if (index != -1)
-                            {
-                                Selection.Polygon = index;
-                            }
-                        }
-                    }
-                }
-            }
+            Selection.CopyFrom(PickSelection(X, Y));
+            if (Selection.Object != -1) lastObject = Level.Objects[Selection.Object];
             undoSet = false;
         }
 
@@ -822,6 +788,7 @@ namespace Weland
 
         public void NudgeSelected(short X, short Y)
         {
+            ClearHover();
             if (Selection.HasMultipleGeometry)
             {
                 NudgeMultiple(X, Y);
@@ -1398,6 +1365,7 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            ClearHover();
             if (RightClick(mods))
             {
                 downX = lastX = X;
@@ -1779,6 +1747,7 @@ namespace Weland
 
         public void DeleteSelected()
         {
+            ClearHover();
             if (Selection.HasMultipleGeometry)
             {
                 DeleteMultiple();
@@ -1893,6 +1862,7 @@ namespace Weland
 
         public void Undo()
         {
+            ClearHover();
             CancelBox();
             CancelSelectionBox();
             CancelCircle();

@@ -18,7 +18,14 @@ namespace Weland
         void BeginMoveTool()
         {
             movePoints.Clear(); moveObjects.Clear(); moveNotes.Clear();
-            if (Selection.HasMultipleGeometry) movePoints = MultipleEndpoints();
+            if (Selection.HasMultipleGeometry)
+            {
+                movePoints = MultipleEndpoints();
+                foreach (MapObject obj in Level.Objects)
+                    if (Selection.Polygons.Contains(obj.PolygonIndex)) moveObjects.Add(obj);
+                foreach (Annotation note in Level.Annotations)
+                    if (Selection.Polygons.Contains(note.PolygonIndex)) moveNotes.Add(note);
+            }
             else if (Selection.Point != -1) movePoints.Add(Selection.Point);
             else if (Selection.Line != -1)
                 foreach (short point in Level.Lines[Selection.Line].EndpointIndexes) movePoints.Add(point);

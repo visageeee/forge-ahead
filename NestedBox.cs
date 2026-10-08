@@ -37,10 +37,29 @@ namespace Weland
             int left = Math.Min(start.X, end.X), right = Math.Max(start.X, end.X);
             int top = Math.Min(start.Y, end.Y), bottom = Math.Max(start.Y, end.Y);
             if (left == right || top == bottom) return -1;
+            Point[] corners = { new Point((short)left, (short)top), new Point((short)right, (short)top),
+                                new Point((short)right, (short)bottom), new Point((short)left, (short)bottom) };
             for (int i = 0; i < Polygons.Count; ++i)
-                if (RectangleBounds(Polygons[i], out Point min, out Point max) &&
-                    left > min.X && right < max.X && top > min.Y && bottom < max.Y)
-                    return (short)i;
+            {
+                Polygon polygon = Polygons[i];
+                if (polygon.VertexCount < 3) continue;
+                if (RectangleBounds(polygon, out Point min, out Point max) &&
+                    left == min.X && right == max.X && top == min.Y && bottom == max.Y) continue;
+                bool contains = true;
+                foreach (Point p in corners)
+                {
+                    bool inside = ContainsBoxCenter(polygon, p.X, p.Y);
+                    for (int edge = 0; !inside && edge < polygon.VertexCount; ++edge)
+                        inside = OnSegment(p, Endpoints[polygon.EndpointIndexes[edge]], Endpoints[polygon.EndpointIndexes[(edge + 1) % polygon.VertexCount]]);
+                    if (!inside) { contains = false; break; }
+                }
+                for (int edge = 0; contains && edge < polygon.VertexCount; ++edge)
+                {
+                    Point a = Endpoints[polygon.EndpointIndexes[edge]], b = Endpoints[polygon.EndpointIndexes[(edge + 1) % polygon.VertexCount]];
+                    if (EntersBox(a, b, left, top, right, bottom)) contains = false;
+                }
+                if (contains) return (short)i;
+            }
             return -1;
         }
 
@@ -56,7 +75,7 @@ namespace Weland
             }
             if (Polygons[container].Type != PolygonType.Normal)
             {
-                reason = "Inset boxes currently require a normal rectangular polygon.";
+                reason = "Inset boxes currently require a normal polygon.";
                 return false;
             }
             // Run every split and geometry-limit check on a separate level.
@@ -72,6 +91,229 @@ namespace Weland
             short container = BoxContainer(start, end);
             if (container == -1 || !CanCreateBox(start, end, out reason)) return false;
             return SplitBox(container, start, end, out reason);
+        }
+
+        // Triangulate a polygon with a rectangular hole. Bridge only existing
+        // vertices, so no fractional intersections or neighbor wall splits are
+        // needed. Ear clipping leaves convex pieces with exact integer geometry.
+        bool InsetPieces(Polygon polygon, short left, short top, short right, short bottom,
+                            out List<List<Point>> triangles, out string reason)
+        {
+            triangles = new List<List<Point>>();
+            reason = "Could not partition this outline into valid polygons.";
+            var outer = new List<Point>();
+            for (int i = 0; i < polygon.VertexCount; ++i) outer.Add(Endpoints[polygon.EndpointIndexes[i]]);
+            long Area(List<Point> ring)
+            {
+                long area = 0;
+                for (int i = 0; i < ring.Count; ++i)
+                {
+                    Point a = ring[i], b = ring[(i + 1) % ring.Count];
+                    area += (long)a.X * b.Y - (long)a.Y * b.X;
+                }
+                return area;
+            }
+            if (Area(outer) < 0) outer.Reverse();
+            var inner = new List<Point> { new Point(left, top), new Point(left, bottom),
+                                         new Point(right, bottom), new Point(right, top) };
+            bool Blocks(Point a, Point b, Point c, Point d)
+            {
+                long ac = ShapeCross(a, b, c), ad = ShapeCross(a, b, d);
+                long ca = ShapeCross(c, d, a), cb = ShapeCross(c, d, b);
+                if (((ac < 0 && ad > 0) || (ac > 0 && ad < 0)) &&
+                    ((ca < 0 && cb > 0) || (ca > 0 && cb < 0))) return true;
+                if (OnSegment(c, a, b) && !SamePoint(c, a) && !SamePoint(c, b)) return true;
+                if (OnSegment(d, a, b) && !SamePoint(d, a) && !SamePoint(d, b)) return true;
+                return false;
+            }
+            bool touching = false;
+            foreach (Point p in inner)
+                for (int e = 0; e < outer.Count; ++e)
+                    if (OnSegment(p, outer[e], outer[(e + 1) % outer.Count])) touching = true;
+            if (touching)
+            {
+                if (!EdgeInsetPieces(outer, inner, triangles)) return false;
+                long area = 0;
+                foreach (var piece in triangles) area += Area(piece);
+                if (area != Area(outer) + Area(inner)) return false;
+                MergeInsetPieces(triangles);
+                reason = null;
+                return true;
+            }
+            int oi = -1, ii = -1;
+            long shortest = long.MaxValue;
+            for (int i = 0; i < outer.Count; ++i)
+                for (int j = 0; j < inner.Count; ++j)
+                {
+                    Point a = outer[i], b = inner[j];
+                    long distance = ((long)a.X - b.X) * (a.X - b.X) + ((long)a.Y - b.Y) * (a.Y - b.Y);
+                    if (distance >= shortest || EntersBox(a, b, left, top, right, bottom) ||
+                        !ContainsBoxCenter(polygon, (a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0)) continue;
+                    bool blocked = false;
+                    for (int e = 0; e < outer.Count; ++e)
+                        if (Blocks(a, b, outer[e], outer[(e + 1) % outer.Count])) blocked = true;
+                    for (int e = 0; e < inner.Count; ++e)
+                        if (Blocks(a, b, inner[e], inner[(e + 1) % inner.Count])) blocked = true;
+                    if (!blocked) { oi = i; ii = j; shortest = distance; }
+                }
+            if (oi == -1) return false;
+            var ringPoints = new List<Point> { outer[oi] };
+            for (int j = 0; j <= inner.Count; ++j) ringPoints.Add(inner[(ii + j) % inner.Count]);
+            for (int i = 0; i < outer.Count; ++i) ringPoints.Add(outer[(oi + i) % outer.Count]);
+            if (!TriangulateInsetRing(ringPoints, triangles)) return false;
+            long total = 0;
+            foreach (List<Point> triangle in triangles) total += Area(triangle);
+            if (total != Area(outer) + Area(inner)) return false;
+            MergeInsetPieces(triangles);
+            reason = null;
+            return true;
+        }
+
+        static bool TriangulateInsetRing(List<Point> ringPoints, List<List<Point>> triangles)
+        {
+            if (ringPoints.Count < 3) return false;
+            while (ringPoints.Count > 3)
+            {
+                bool clipped = false;
+                for (int i = 0; i < ringPoints.Count; ++i)
+                {
+                    Point a = ringPoints[(i + ringPoints.Count - 1) % ringPoints.Count], b = ringPoints[i],
+                          c = ringPoints[(i + 1) % ringPoints.Count];
+                    if (ShapeCross(a, b, c) <= 0) continue;
+                    bool blocked = false;
+                    foreach (Point q in ringPoints)
+                    {
+                        if (SamePoint(q, a) || SamePoint(q, b) || SamePoint(q, c)) continue;
+                        if (ShapeCross(a, b, q) >= 0 && ShapeCross(b, c, q) >= 0 && ShapeCross(c, a, q) >= 0)
+                        { blocked = true; break; }
+                    }
+                    if (blocked) continue;
+                    triangles.Add(new List<Point> { a, b, c });
+                    ringPoints.RemoveAt(i); clipped = true; break;
+                }
+                if (!clipped) return false;
+            }
+            if (ShapeCross(ringPoints[0], ringPoints[1], ringPoints[2]) <= 0) return false;
+            triangles.Add(ringPoints);
+            return true;
+        }
+
+        // For boundary contact, cancel shared perimeter segments and walk the
+        // remaining directed edges. The outside region can have several loops
+        // (for example, a box spanning the full width of its container).
+        static bool EdgeInsetPieces(List<Point> outer, List<Point> inner, List<List<Point>> pieces)
+        {
+            var vertices = new HashSet<Point>(outer); vertices.UnionWith(inner);
+            var edges = new List<(Point A, Point B)>();
+            void AddRing(List<Point> ring)
+            {
+                for (int i = 0; i < ring.Count; ++i)
+                {
+                    Point a = ring[i], b = ring[(i + 1) % ring.Count];
+                    var split = new List<Point>();
+                    foreach (Point p in vertices) if (OnSegment(p, a, b)) split.Add(p);
+                    split.Sort((p, q) => (((long)p.X-a.X)*(p.X-a.X)+((long)p.Y-a.Y)*(p.Y-a.Y)).CompareTo(
+                        ((long)q.X-a.X)*(q.X-a.X)+((long)q.Y-a.Y)*(q.Y-a.Y)));
+                    for (int j = 1; j < split.Count; ++j)
+                    {
+                        var edge = (A: split[j - 1], B: split[j]);
+                        int reverse = edges.FindIndex(e => SamePoint(e.A, edge.B) && SamePoint(e.B, edge.A));
+                        if (reverse != -1) edges.RemoveAt(reverse); else edges.Add(edge);
+                    }
+                }
+            }
+            AddRing(outer); AddRing(inner);
+            while (edges.Count > 0)
+            {
+                var edge = edges[0]; edges.RemoveAt(0);
+                Point start = edge.A, previous = edge.A, current = edge.B;
+                var ring = new List<Point> { start };
+                while (!SamePoint(current, start))
+                {
+                    ring.Add(current);
+                    double incoming = Math.Atan2(previous.Y - current.Y, previous.X - current.X);
+                    int next = -1; double bestTurn = double.MaxValue;
+                    for (int i = 0; i < edges.Count; ++i)
+                    {
+                        if (!SamePoint(edges[i].A, current)) continue;
+                        double angle = Math.Atan2(edges[i].B.Y - current.Y, edges[i].B.X - current.X);
+                        double turn = incoming - angle;
+                        while (turn < 0) turn += 2 * Math.PI;
+                        if (turn < bestTurn) { next = i; bestTurn = turn; }
+                    }
+                    if (next == -1) return false;
+                    previous = current; current = edges[next].B; edges.RemoveAt(next);
+                }
+                if (!TriangulateInsetRing(ring, pieces)) return false;
+            }
+            return true;
+        }
+
+        // A union of adjacent pieces is convex exactly when its convex hull
+        // has the same area. Plan these merges before creating any map lines,
+        // so the triangulation diagonals never become stray geometry.
+        void MergeInsetPieces(List<List<Point>> pieces)
+        {
+            long Area(List<Point> ring)
+            {
+                long area = 0;
+                for (int i = 0; i < ring.Count; ++i)
+                {
+                    Point a = ring[i], b = ring[(i + 1) % ring.Count];
+                    area += (long)a.X * b.Y - (long)a.Y * b.X;
+                }
+                return area;
+            }
+            var allPoints = new HashSet<Point>(Endpoints);
+            foreach (var piece in pieces) foreach (Point p in piece) allPoints.Add(p);
+            List<Point> Hull(List<Point> a, List<Point> b)
+            {
+                var unique = new HashSet<Point>(a); unique.UnionWith(b);
+                var sorted = new List<Point>(unique);
+                sorted.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
+                var lower = new List<Point>(); var upper = new List<Point>();
+                foreach (Point p in sorted)
+                {
+                    while (lower.Count >= 2 && ShapeCross(lower[lower.Count - 2], lower[lower.Count - 1], p) <= 0)
+                        lower.RemoveAt(lower.Count - 1);
+                    lower.Add(p);
+                }
+                for (int i = sorted.Count - 1; i >= 0; --i)
+                {
+                    Point p = sorted[i];
+                    while (upper.Count >= 2 && ShapeCross(upper[upper.Count - 2], upper[upper.Count - 1], p) <= 0)
+                        upper.RemoveAt(upper.Count - 1);
+                    upper.Add(p);
+                }
+                lower.RemoveAt(lower.Count - 1); upper.RemoveAt(upper.Count - 1);
+                lower.AddRange(upper);
+                return lower;
+            }
+            while (true)
+            {
+                int bestA = -1, bestB = -1;
+                long bestEdge = -1;
+                List<Point> bestHull = null;
+                for (int i = 0; i < pieces.Count; ++i)
+                    for (int j = i + 1; j < pieces.Count; ++j)
+                    {
+                        List<Point> hull = Hull(pieces[i], pieces[j]);
+                        if (hull.Count > Polygon.MaxVertexCount || Area(hull) != Area(pieces[i]) + Area(pieces[j])) continue;
+                        int vertices = 0;
+                        for (int e = 0; e < hull.Count; ++e)
+                            foreach (Point p in allPoints)
+                                if (OnSegment(p, hull[e], hull[(e + 1) % hull.Count]) && !SamePoint(p, hull[(e + 1) % hull.Count])) ++vertices;
+                        if (vertices > Polygon.MaxVertexCount) continue;
+                        // Prefer removing long diagonals before shorter edges.
+                        long shared = 0;
+                        foreach (Point p in pieces[i]) foreach (Point q in pieces[i])
+                            if (!SamePoint(p, q) && pieces[j].Contains(p) && pieces[j].Contains(q))
+                                shared = Math.Max(shared, ((long)p.X - q.X) * (p.X - q.X) + ((long)p.Y - q.Y) * (p.Y - q.Y));
+                        if (shared > bestEdge) { bestA = i; bestB = j; bestHull = hull; bestEdge = shared; }
+                    }
+                if (bestA == -1) return;
+                pieces[bestA] = bestHull; pieces.RemoveAt(bestB);
+            }
         }
 
         class BoxWall
@@ -98,9 +340,11 @@ namespace Weland
         {
             reason = null;
             Polygon original = Polygons[index];
-            RectangleBounds(original, out Point min, out Point max);
+            bool rectangular = RectangleBounds(original, out Point min, out Point max);
             short left = Math.Min(start.X, end.X), right = Math.Max(start.X, end.X);
             short top = Math.Min(start.Y, end.Y), bottom = Math.Max(start.Y, end.Y);
+            List<List<Point>> pieces = null;
+            if (!rectangular && !InsetPieces(original, left, top, right, bottom, out pieces, out reason)) return false;
             var walls = new List<BoxWall>();
             // Detach the perimeter without deleting objects, references, or
             // neighboring polygons. Store textured sides before splitting.
@@ -136,9 +380,23 @@ namespace Weland
                 new[] { new Point(right, top), new Point(max.X, bottom) },
                 new[] { new Point(left, top), new Point(right, bottom) }
             };
-            foreach (Point[] box in boxes)
+            if (rectangular)
             {
-                if (!CreatePlainBox(box[0], box[1], out reason)) return false;
+                foreach (Point[] box in boxes)
+                {
+                    if (box[0].X == box[1].X || box[0].Y == box[1].Y) continue;
+                    if (!CreatePlainBox(box[0], box[1], out reason)) return false;
+                    CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
+                }
+            }
+            else
+            {
+                foreach (List<Point> piece in pieces)
+                {
+                    if (!CreateCirclePolygon(piece, out reason)) return false;
+                    CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
+                }
+                if (!CreatePlainBox(new Point(left, top), new Point(right, bottom), out reason)) return false;
                 CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
             }
             short centerIndex = (short)(Polygons.Count - 1);
@@ -180,9 +438,15 @@ namespace Weland
                 // Inclusive bounds give objects on an internal edge a stable
                 // valid owner, with the inset taking priority.
                 if (p.X >= left && p.X <= right && p.Y >= top && p.Y <= bottom) return index;
-                if (p.Y <= top) return (short)first;
-                if (p.Y >= bottom) return (short)(first + 1);
-                return (short)(first + (p.X <= left ? 2 : 3));
+                for (int i = first; i < Polygons.Count; ++i)
+                {
+                    Polygon polygon = Polygons[i];
+                    if (ContainsBoxCenter(polygon, p.X, p.Y)) return (short)i;
+                    for (int edge = 0; edge < polygon.VertexCount; ++edge)
+                        if (OnSegment(p, Endpoints[polygon.EndpointIndexes[edge]],
+                            Endpoints[polygon.EndpointIndexes[(edge + 1) % polygon.VertexCount]])) return (short)i;
+                }
+                return index;
             }
             foreach (MapObject obj in Objects)
                 if (obj.PolygonIndex == index) obj.PolygonIndex = PartFor(new Point(obj.X, obj.Y));
