@@ -7,7 +7,7 @@ namespace Weland
     {
         Select,
         Zoom,
-        Move,
+        Pan,
         Line,
         Fill,
         Object,
@@ -23,7 +23,10 @@ namespace Weland
         RandomSound,
         FloorTexture,
         CeilingTexture,
-        VisualMode
+        VisualMode,
+        Box,
+        Circle,
+        Move
     }
 
     [Flags]
@@ -63,6 +66,9 @@ namespace Weland
         public short Line = -1;
         public short Polygon = -1;
         public short Annotation = -1;
+        public HashSet<short> Points = new HashSet<short>();
+        public HashSet<short> Lines = new HashSet<short>();
+        public bool HasMultipleGeometry => Points.Count != 0 || Lines.Count != 0;
 
         public void Clear()
         {
@@ -71,6 +77,8 @@ namespace Weland
             Line = -1;
             Polygon = -1;
             Annotation = -1;
+            Points.Clear();
+            Lines.Clear();
         }
 
         public void CopyFrom(Selection other)
@@ -80,10 +88,12 @@ namespace Weland
             Line = other.Line;
             Polygon = other.Polygon;
             Annotation = other.Annotation;
+            Points = new HashSet<short>(other.Points);
+            Lines = new HashSet<short>(other.Lines);
         }
     }
 
-    public class Editor
+    public partial class Editor
     {
         public bool Dirty = false;
         public bool RedrawAll = false;
@@ -105,6 +115,10 @@ namespace Weland
             }
             set
             {
+                CancelBox();
+                CancelSelectionBox();
+                CancelCircle();
+                CancelMoveTool();
                 tool = value;
                 if (Level.TemporaryLineStartIndex != -1)
                 {
@@ -132,7 +146,7 @@ namespace Weland
                     Selection.Clear();
                     Selection.Annotation = selected_annotation;
                 }
-                else if (value != Tool.Select && value != Tool.Move)
+                else if (value != Tool.Select && value != Tool.Pan && value != Tool.Move)
                 {
                     Selection.Clear();
                 }
@@ -150,6 +164,84 @@ namespace Weland
         short downX;
         short downY;
 
+        public bool DrawingBox { get; private set; }
+        public Point BoxStart { get; private set; }
+        public Point BoxEnd { get; private set; }
+        public string BoxMessage { get; private set; }
+
+        Point SnapBoxPoint(short X, short Y)
+        {
+            Point p = new Point(X, Y);
+            short index = ClosestPoint(p);
+            if (index != -1) return Level.Endpoints[index];
+            p = GridAdjust(p);
+            index = ClosestPoint(p);
+            return index == -1 ? p : Level.Endpoints[index];
+        }
+
+        public void CancelBox()
+        {
+            if (DrawingBox)
+            {
+                AddDirty(BoxStart);
+                AddDirty(BoxEnd);
+            }
+            DrawingBox = false;
+            BoxMessage = null;
+        }
+
+        public void StartBox(short X, short Y)
+        {
+            CancelBox();
+            Selection.Clear();
+            BoxStart = BoxEnd = SnapBoxPoint(X, Y);
+            DrawingBox = true;
+            AddDirty(BoxStart);
+        }
+
+        public void UpdateBox(short X, short Y)
+        {
+            if (!DrawingBox) return;
+            AddDirty(BoxStart);
+            AddDirty(BoxEnd);
+            Point end = SnapBoxPoint(X, Y);
+            // Snap the two other corners too, while keeping the box rectangular.
+            // Lock any coordinate already snapped at the drag endpoints.
+            bool lockX = Level.Endpoints.Contains(end);
+            bool lockY = lockX;
+            short index = ClosestPoint(new Point(end.X, BoxStart.Y));
+            if (!lockX && index != -1 && Level.Endpoints[index].Y == BoxStart.Y)
+                end.X = Level.Endpoints[index].X;
+            index = ClosestPoint(new Point(BoxStart.X, end.Y));
+            if (!lockY && index != -1 && Level.Endpoints[index].X == BoxStart.X)
+                end.Y = Level.Endpoints[index].Y;
+            BoxEnd = end;
+            Level.CanCreateBox(BoxStart, BoxEnd, out string reason);
+            BoxMessage = reason;
+            AddDirty(BoxEnd);
+        }
+
+        public void FinishBox(short X, short Y)
+        {
+            if (!DrawingBox) return;
+            UpdateBox(X, Y);
+            DrawingBox = false;
+            if (!Level.CanCreateBox(BoxStart, BoxEnd, out string reason))
+            {
+                BoxMessage = reason;
+                return;
+            }
+            SetUndo();
+            if (Level.CreateBox(BoxStart, BoxEnd, out reason))
+            {
+                Selection.Polygon = Level.LastCreatedBoxPolygonIndex;
+                BoxMessage = null;
+                Changed = true;
+                RedrawAll = true;
+            }
+            else BoxMessage = reason;
+        }
+
         public int DefaultSnapDistance;
         public int ObjectSnapDistance;
         public int InertiaDistance;
@@ -157,6 +249,7 @@ namespace Weland
 
         public void LoadSettings()
         {
+            CircleSides = Weland.Settings.GetSetting("Tools/CircleSides", 8);
             DefaultSnapDistance = Weland.Settings.GetSetting("Distance/Select/Default", 4);
             ObjectSnapDistance = Weland.Settings.GetSetting("Distance/Select/Object", 8);
             InertiaDistance = Weland.Settings.GetSetting("Distance/Inertia/Default", 8);
@@ -165,6 +258,7 @@ namespace Weland
 
         public void SaveSettings()
         {
+            Weland.Settings.PutSetting("Tools/CircleSides", CircleSides);
             Weland.Settings.PutSetting("Distance/Select/Default", DefaultSnapDistance);
             Weland.Settings.PutSetting("Distance/Select/Object", ObjectSnapDistance);
             Weland.Settings.PutSetting("Distance/Inertia/Default", InertiaDistance);
@@ -537,7 +631,7 @@ namespace Weland
             }
         }
 
-        void Select(short X, short Y)
+        void SelectSingle(short X, short Y)
         {
             Selection.Clear();
             Point p = new Point(X, Y);
@@ -728,6 +822,11 @@ namespace Weland
 
         public void NudgeSelected(short X, short Y)
         {
+            if (Selection.HasMultipleGeometry)
+            {
+                NudgeMultiple(X, Y);
+                return;
+            }
             bool changed = true;
             SetUndo();
             if (Selection.Point != -1)
@@ -1299,6 +1398,14 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            if (RightClick(mods))
+            {
+                downX = lastX = X;
+                downY = lastY = Y;
+                rightButtonMove = true;
+                BeginMoveTool();
+                return;
+            }
             if (Tool == Tool.FloorHeight)
             {
                 if (Alt(mods) || RightClick(mods))
@@ -1439,14 +1546,26 @@ namespace Weland
                 }
                 else
                 {
-                    Select(X, Y);
+                    BeginSelection(X, Y, (mods & EditorModifiers.Shift) != 0);
                 }
             }
             else if (!RightClick(mods))
             {
-                if (Tool == Tool.Line)
+                if (Tool == Tool.Move)
+                {
+                    BeginMoveTool();
+                }
+                else if (Tool == Tool.Line)
                 {
                     StartLine(X, Y);
+                }
+                else if (Tool == Tool.Box)
+                {
+                    StartBox(X, Y);
+                }
+                else if (Tool == Tool.Circle)
+                {
+                    StartCircle(X, Y);
                 }
                 else if (Tool == Tool.Fill)
                 {
@@ -1473,7 +1592,19 @@ namespace Weland
 
         public void Motion(short X, short Y, EditorModifiers mods)
         {
-            if (Tool == Tool.Line)
+            if (rightButtonMove || Tool == Tool.Move)
+            {
+                UpdateMoveTool(X, Y);
+            }
+            else if (Tool == Tool.Circle)
+            {
+                UpdateCircle(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Box)
+            {
+                UpdateBox(X, Y);
+            }
+            else if (Tool == Tool.Line)
             {
                 bool constrainAngle = (mods & EditorModifiers.Shift) != 0;
                 bool constrainLength = (mods & EditorModifiers.Alt) != 0;
@@ -1485,7 +1616,7 @@ namespace Weland
             }
             else if (Tool == Tool.Select)
             {
-                MoveSelected(X, Y);
+                UpdateSelection(X, Y);
             }
             else if (Tool == Tool.FloorHeight)
             {
@@ -1616,7 +1747,29 @@ namespace Weland
 
         public void ButtonRelease(short X, short Y, EditorModifiers mods)
         {
-            if (Tool == Tool.Line)
+            if (rightButtonMove)
+            {
+                FinishMoveTool(X, Y);
+                rightButtonMove = false;
+                return;
+            }
+            if (Tool == Tool.Move)
+            {
+                FinishMoveTool(X, Y);
+            }
+            else if (Tool == Tool.Select)
+            {
+                FinishSelection(X, Y);
+            }
+            else if (Tool == Tool.Circle)
+            {
+                FinishCircle(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Box)
+            {
+                FinishBox(X, Y);
+            }
+            else if (Tool == Tool.Line)
             {
                 bool constrainAngle = (mods & EditorModifiers.Shift) != 0;
                 bool constrainLength = (mods & EditorModifiers.Alt) != 0;
@@ -1626,6 +1779,11 @@ namespace Weland
 
         public void DeleteSelected()
         {
+            if (Selection.HasMultipleGeometry)
+            {
+                DeleteMultiple();
+                return;
+            }
             bool changed = true;
             if (Selection.Point != -1)
             {
@@ -1735,6 +1893,10 @@ namespace Weland
 
         public void Undo()
         {
+            CancelBox();
+            CancelSelectionBox();
+            CancelCircle();
+            CancelMoveTool();
             if (undoState != null)
             {
                 Wadfile.DirectoryEntry redo = Level.Save().Clone();

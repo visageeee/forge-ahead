@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Remove="Plugins\**" />
+    <Compile Remove="tests\**" />
     <EmbeddedResource Remove="Plugins\**" />
     <None Remove="Plugins\**" />
   </ItemGroup>
@@ -57,6 +58,15 @@
       <LogicalName>randomsoundparameters.glade</LogicalName>
     </EmbeddedResource>
     
+    <EmbeddedResource Include="images\move-selection.svg">
+      <LogicalName>move-selection.svg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="images\circle.svg">
+      <LogicalName>circle.svg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="images\box.svg">
+      <LogicalName>box.svg</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="images\1x.png">
       <LogicalName>1x.png</LogicalName>
     </EmbeddedResource>

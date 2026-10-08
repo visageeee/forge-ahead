@@ -20,6 +20,10 @@ namespace Weland
             set
             {
                 drawingArea.Level = value;
+                editor.CancelBox();
+                editor.CancelSelectionBox();
+                editor.CancelCircle();
+                editor.CancelMoveTool();
                 editor.Level = value;
             }
         }
@@ -66,8 +70,11 @@ namespace Weland
 
         [Widget] RadioToolButton selectButton;
         [Widget] RadioToolButton zoomButton;
+        [Widget] RadioToolButton panButton;
         [Widget] RadioToolButton moveButton;
         [Widget] RadioToolButton lineButton;
+        [Widget] RadioToolButton boxButton;
+        [Widget] RadioToolButton circleButton;
         [Widget] RadioToolButton fillButton;
         [Widget] RadioToolButton objectButton;
         [Widget] RadioToolButton annotationButton;
@@ -180,11 +187,15 @@ namespace Weland
             var builder = new Builder("mapwindow.glade");
             builder.Autoconnect(this);
             SetupDrawingArea();
+            SetupCircleOptions();
 
             SetIconResource(selectButton, "arrow.png");
             SetIconResource(zoomButton, "zoom.png");
-            SetIconResource(moveButton, "move.png");
+            SetIconResource(panButton, "move.png");
+            SetIconResource(moveButton, "move-selection.svg");
             SetIconResource(lineButton, "line.png");
+            SetIconResource(boxButton, "box.svg");
+            SetIconResource(circleButton, "circle.svg");
             SetIconResource(fillButton, "fill.png");
             SetIconResource(objectButton, "object.png");
             SetIconResource(annotationButton, "annotation.png");
@@ -228,6 +239,7 @@ namespace Weland
             LoadLayer();
 
             editor.Grid = grid;
+            drawingArea.Editor = editor;
             editor.Selection = selection;
             editor.Scale = drawingArea.Transform.Scale;
             Level.Filter = HeightFilter;
@@ -290,7 +302,21 @@ namespace Weland
             const int id = 1;
             statusbar.Pop(id);
 
-            if (selection.Point != -1)
+            if (editor.Tool == Tool.Circle && (editor.DrawingCircle || editor.CircleMessage != null))
+            {
+                statusbar.Push(id, editor.CircleMessage ?? String.Format("Circle: {0} sides", editor.CircleSides));
+            }
+            else if (selection.HasMultipleGeometry || editor.DrawingSelectionBox)
+            {
+                statusbar.Push(id, String.Format("Selected: {0} vertices, {1} lines", selection.Points.Count, selection.Lines.Count));
+            }
+            else if (editor.Tool == Tool.Box && (editor.DrawingBox || editor.BoxMessage != null))
+            {
+                statusbar.Push(id, editor.BoxMessage ?? String.Format("Box: {0:0.000} × {1:0.000} WU",
+                    World.ToDouble(Math.Abs(editor.BoxEnd.X - editor.BoxStart.X)),
+                    World.ToDouble(Math.Abs(editor.BoxEnd.Y - editor.BoxStart.Y))));
+            }
+            else if (selection.Point != -1)
             {
                 statusbar.Push(id, String.Format("Point Index: {0}\tLocation: ({1:0.000}, {2:0.000})", selection.Point, World.ToDouble(Level.Endpoints[selection.Point].X), World.ToDouble(Level.Endpoints[selection.Point].Y)));
             }
@@ -584,7 +610,12 @@ namespace Weland
 
             if (ev.Type == EventType.ButtonPress)
             {
-                if (ev.Button == 2 || editor.Tool == Tool.Move)
+                if (ev.Button == 3)
+                {
+                    editor.ButtonPress(X, Y, Modifiers(ev.State) | EditorModifiers.RightClick);
+                    Redraw();
+                }
+                else if (ev.Button == 2 || editor.Tool == Tool.Pan)
                 {
                     xDown = ev.X;
                     yDown = ev.Y;
@@ -616,7 +647,7 @@ namespace Weland
                     }
                 }
             }
-            else if (ev.Type == EventType.TwoButtonPress)
+            else if (ev.Type == EventType.TwoButtonPress && ev.Button == 1)
             {
                 if (selection.Line != -1)
                 {
@@ -643,9 +674,10 @@ namespace Weland
 
         internal void OnButtonReleased(object obj, ButtonReleaseEventArgs args)
         {
-            if (args.Event.Button == 1)
+            if (args.Event.Button == 1 || args.Event.Button == 3)
             {
                 EditorModifiers modifiers = Modifiers(args.Event.State);
+                if (args.Event.Button == 3) modifiers |= EditorModifiers.RightClick;
                 editor.ButtonRelease(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y), modifiers);
                 Redraw();
             }
@@ -689,7 +721,15 @@ namespace Weland
 
         internal void OnMotion(object obj, MotionNotifyEventArgs args)
         {
-            if (editor.Tool == Tool.Move || ((args.Event.State & ModifierType.Button2Mask) != 0))
+            if ((args.Event.State & ModifierType.Button3Mask) != 0)
+            {
+                editor.Motion(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y),
+                    Modifiers(args.Event.State) | EditorModifiers.RightClick);
+                RedrawDirty();
+                UpdateStatusBar();
+                args.RetVal = true;
+            }
+            else if (editor.Tool == Tool.Pan || ((args.Event.State & ModifierType.Button2Mask) != 0))
             {
                 hscrollbar1.Value = xOffsetDown + (xDown - args.Event.X) / drawingArea.Transform.Scale;
                 vscrollbar1.Value = yOffsetDown + (yDown - args.Event.Y) / drawingArea.Transform.Scale;
@@ -701,13 +741,13 @@ namespace Weland
                 RedrawDirty();
             }
 
-            if (editor.Tool == Tool.Line)
+            if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
             {
                 UpdateStatusBar();
             }
         }
 
-        Tool oldTool = Tool.Move;
+        Tool oldTool = Tool.Pan;
 
         static bool optionKey = false;
 
@@ -777,12 +817,20 @@ namespace Weland
             switch (args.Event.Key)
             {
                 case Gdk.Key.space:
-                    if (editor.Tool != Tool.Move)
+                    if (editor.Tool != Tool.Pan)
                     {
                         oldTool = editor.Tool;
-                        editor.Tool = Tool.Move;
+                        editor.Tool = Tool.Pan;
                         drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
                     }
+                    break;
+                case Gdk.Key.Escape:
+                    editor.CancelBox();
+                    editor.CancelSelectionBox();
+                    editor.CancelCircle();
+                    editor.CancelMoveTool();
+                    Redraw();
+                    UpdateStatusBar();
                     break;
                 case Gdk.Key.x:
                     if (editor.Tool == Tool.Select)
@@ -866,6 +914,14 @@ namespace Weland
                 case Gdk.Key.L:
                     lineButton.Active = true;
                     break;
+                case Gdk.Key.b:
+                case Gdk.Key.B:
+                    boxButton.Active = true;
+                    break;
+                case Gdk.Key.c:
+                case Gdk.Key.C:
+                    circleButton.Active = true;
+                    break;
                 case Gdk.Key.f:
                 case Gdk.Key.F:
                     fillButton.Active = true;
@@ -876,6 +932,10 @@ namespace Weland
                     break;
                 case Gdk.Key.d:
                 case Gdk.Key.D:
+                    panButton.Active = true;
+                    break;
+                case Gdk.Key.m:
+                case Gdk.Key.M:
                     moveButton.Active = true;
                     break;
                 case Gdk.Key.t:
@@ -922,7 +982,7 @@ namespace Weland
             if (args.Event.Key == Gdk.Key.space)
             {
                 ChooseTool(oldTool);
-                oldTool = Tool.Move;
+                oldTool = Tool.Pan;
                 args.RetVal = true;
             }
             else if (args.Event.Key == Gdk.Key.x)
@@ -1232,6 +1292,10 @@ namespace Weland
             {
                 ChooseTool(Tool.Zoom);
             }
+            else if (button == panButton)
+            {
+                ChooseTool(Tool.Pan);
+            }
             else if (button == moveButton)
             {
                 ChooseTool(Tool.Move);
@@ -1243,6 +1307,14 @@ namespace Weland
             else if (button == fillButton)
             {
                 ChooseTool(Tool.Fill);
+            }
+            else if (button == boxButton)
+            {
+                ChooseTool(Tool.Box);
+            }
+            else if (button == circleButton)
+            {
+                ChooseTool(Tool.Circle);
             }
             else if (button == objectButton)
             {
@@ -1510,15 +1582,20 @@ namespace Weland
         void ChooseTool(Tool tool)
         {
             editor.Tool = tool;
+            if (circleOptions != null)
+            {
+                if (tool == Tool.Circle) circleOptions.Show();
+                else circleOptions.Hide();
+            }
             if (tool == Tool.Zoom)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Target);
             }
-            else if (tool == Tool.Move)
+            else if (tool == Tool.Pan || tool == Tool.Move)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
             }
-            else if (tool == Tool.Line || tool == Tool.Object || tool == Tool.Annotation)
+            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Object || tool == Tool.Annotation)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Cross);
             }

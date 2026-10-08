@@ -251,12 +251,12 @@ namespace Weland
         }
 
         // split line, return a new point index at X, Y
-        public short SplitLine(short index, short X, short Y)
+        public short SplitLine(short index, short X, short Y, short existingPoint = -1)
         {
             Line line = Lines[index];
             short e0 = line.EndpointIndexes[0];
             short e1 = line.EndpointIndexes[1];
-            short p = NewPoint(X, Y);
+            short p = existingPoint == -1 ? NewPoint(X, Y) : existingPoint;
 
             short l1 = NewLine(e0, p);
             short l2 = NewLine(p, e1);
@@ -368,6 +368,7 @@ namespace Weland
                             polygon.EndpointIndexes[i + 1] = p;
                         }
 
+                        EndpointPolygons[p].Add(polygon);
                         polygon.VertexCount++;
                         UpdatePolygonConcavity(polygon);
 
@@ -717,6 +718,11 @@ namespace Weland
                 }
             }
 
+            return CreatePolygonFromLoop(loop);
+        }
+
+        bool CreatePolygonFromLoop(List<short> loop, bool preserveAdjacentSides = false)
+        {
             Polygon polygon = new Polygon();
             polygon.VertexCount = (ushort)loop.Count;
             loop.CopyTo(polygon.LineIndexes);
@@ -789,7 +795,7 @@ namespace Weland
                             }
                             else
                             {
-                                Sides[line.CounterclockwisePolygonSideIndex].Clear();
+                                if (!preserveAdjacentSides) Sides[line.CounterclockwisePolygonSideIndex].Clear();
                             }
                         }
                     }
@@ -803,7 +809,7 @@ namespace Weland
                             }
                             else
                             {
-                                Sides[line.ClockwisePolygonSideIndex].Clear();
+                                if (!preserveAdjacentSides) Sides[line.ClockwisePolygonSideIndex].Clear();
                             }
                         }
                     }

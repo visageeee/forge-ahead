@@ -68,6 +68,7 @@ namespace Weland
 
         public Transform Transform = new Transform();
         public Level Level;
+        public Editor Editor;
         public Grid Grid = new Grid();
         public Selection Selection = new Selection();
         public bool ShowMonsters = true;
@@ -77,6 +78,8 @@ namespace Weland
         public bool ShowGoals = true;
         public bool ShowSounds = true;
         public bool Antialias;
+        public int LineWidth = 1;
+        public int VertexSize = 2;
         public DrawMode Mode = DrawMode.Draw;
         public PolygonFilter Filter = x => true;
 
@@ -114,6 +117,8 @@ namespace Weland
             itemImages[ItemType.Smg] = new Gdk.Pixbuf(null, "smg.png");
             itemImages[ItemType.SmgAmmo] = new Gdk.Pixbuf(null, "smg-ammo.png");
 
+            LineWidth = Math.Max(1, Math.Min(8, Weland.Settings.GetSetting("Drawer/LineWidth", 1)));
+            VertexSize = Math.Max(2, Math.Min(16, Weland.Settings.GetSetting("Drawer/VertexSize", 2)));
             Antialias = Weland.Settings.GetSetting("Drawer/SmoothLines", true);
 
             LoadColors();
@@ -146,7 +151,7 @@ namespace Weland
 
         protected override bool OnDrawn(Cairo.Context cr)
         {
-            drawer = new CairoDrawer(cr, Antialias);
+            drawer = new CairoDrawer(cr, Antialias, LineWidth, VertexSize);
             drawer.Clear(backgroundColor);
 
             if (Grid.Visible)
@@ -243,13 +248,14 @@ namespace Weland
                     selectedLine = Level.Lines[Selection.Line];
                 }
 
-                foreach (Line line in Level.Lines)
+                for (int lineIndex = 0; lineIndex < Level.Lines.Count; ++lineIndex)
                 {
+                    Line line = Level.Lines[lineIndex];
                     if ((Points[line.EndpointIndexes[0]] & Points[line.EndpointIndexes[1]]) == CohenSutherland.Inside && line != selectedLine)
                     {
                         if (Level.FilterLine(Filter, line))
                         {
-                            DrawLine(line);
+                            DrawLine(line, Selection.Lines.Contains((short)lineIndex));
                         }
                     }
                 }
@@ -263,7 +269,8 @@ namespace Weland
                 {
                     if (Level.FilterPoint(Filter, i) && Points[i] == CohenSutherland.Inside)
                     {
-                        DrawPoint(Level.Endpoints[i]);
+                        if (Selection.Points.Contains(i)) DrawFatPoint(selectedLineColor, Level.Endpoints[i]);
+                        else DrawPoint(Level.Endpoints[i]);
                     }
                 }
 
@@ -329,6 +336,37 @@ namespace Weland
                     // draw the selected point
                     DrawFatPoint(selectedLineColor, Level.Endpoints[Selection.Point]);
                 }
+
+                if (Editor != null && Editor.DrawingCircle)
+                {
+                    var points = Editor.CircleVertices;
+                    Drawer.Color color = Editor.CircleMessage == null ? selectedLineColor : invalidPolygonColor;
+                    for (int i = 0; i < points.Count; ++i)
+                    {
+                        drawer.DrawLine(color, Transform.ToScreenPoint(points[i]), Transform.ToScreenPoint(points[(i + 1) % points.Count]));
+                        DrawFatPoint(color, points[i]);
+                    }
+                }
+
+                if (Editor != null && Editor.DrawingSelectionBox)
+                {
+                    Point a = Editor.SelectionBoxStart, b = Editor.SelectionBoxEnd;
+                    Point[] corners = { a, new Point(b.X, a.Y), b, new Point(a.X, b.Y) };
+                    for (int i = 0; i < 4; ++i)
+                        drawer.DrawLine(selectedLineColor, Transform.ToScreenPoint(corners[i]), Transform.ToScreenPoint(corners[(i + 1) % 4]));
+                }
+
+                if (Editor != null && Editor.DrawingBox)
+                {
+                    Point a = Editor.BoxStart, b = Editor.BoxEnd;
+                    Point[] corners = { a, new Point(b.X, a.Y), b, new Point(a.X, b.Y) };
+                    Drawer.Color color = Editor.BoxMessage == null ? selectedLineColor : invalidPolygonColor;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        drawer.DrawLine(color, Transform.ToScreenPoint(corners[i]), Transform.ToScreenPoint(corners[(i + 1) % 4]));
+                        DrawFatPoint(color, corners[i]);
+                    }
+                }
             }
 
             drawer.Dispose();
@@ -369,7 +407,7 @@ namespace Weland
 
         void DrawFatPoint(Drawer.Color color, Point point)
         {
-            const int r = 2;
+            double r = VertexSize / 2.0 + 1;
             List<Drawer.Point> points = new List<Drawer.Point>();
             double X = Transform.ToScreenX(point.X);
             double Y = Transform.ToScreenY(point.Y);
@@ -406,7 +444,7 @@ namespace Weland
                     p2.X = Right;
                     p2.Y = (short)j;
 
-                    drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+                    drawer.DrawGridLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
                 }
 
                 // draw vertical map lines
@@ -417,7 +455,7 @@ namespace Weland
                     p2.X = (short)i;
                     p2.Y = Bottom;
 
-                    drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+                    drawer.DrawGridLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
                 }
 
                 // draw grid intersects
@@ -469,7 +507,7 @@ namespace Weland
                 tmp = lpx + (lpy - Top) * c / s;
                 if (tmp > Right) { p2.X = Right; p2.Y = (short)(lpy + (lpx - Right) * s / c); }
                 else { p2.X = (short)tmp; p2.Y = Top; }
-                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+                drawer.DrawGridLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
 
                 //move to the next line
                 lpx += r * s; lpy += r * c;
@@ -504,7 +542,7 @@ namespace Weland
                 tmp = lpx - (lpy - Top) * s / c;
                 if (tmp < Left) { p2.X = Left; p2.Y = (short)(lpy - (lpx - Left) * c / s); }
                 else { p2.X = (short)tmp; p2.Y = Top; }
-                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+                drawer.DrawGridLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
 
                 //draw the intersections
                 //this is done in two steps, once for either direction away from the perpendicular line passing through (lpx,lpy)
@@ -545,13 +583,13 @@ namespace Weland
         }
 
 
-        void DrawLine(Line line)
+        void DrawLine(Line line, bool selected = false)
         {
             Point p1 = Level.Endpoints[line.EndpointIndexes[0]];
             Point p2 = Level.Endpoints[line.EndpointIndexes[1]];
 
             Drawer.Color color = solidLineColor;
-            if (Selection.Line != -1 && line == Level.Lines[Selection.Line])
+            if (selected || (Selection.Line != -1 && line == Level.Lines[Selection.Line]))
             {
                 color = selectedLineColor;
             }

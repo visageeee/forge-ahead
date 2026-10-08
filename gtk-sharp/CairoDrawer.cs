@@ -9,13 +9,18 @@ namespace Weland
 
         public Context Context { get; }
 
-        public CairoDrawer(Context context, bool antialias)
+        readonly double lineWidth;
+        readonly double vertexSize;
+
+        public CairoDrawer(Context context, bool antialias, double lineWidth = 1, double vertexSize = 2)
         {
             if (!antialias)
             {
                 context.Antialias = Antialias.None;
             }
             Context = context;
+            this.lineWidth = lineWidth;
+            this.vertexSize = vertexSize;
         }
 
         class TextureSurface : IDisposable
@@ -98,10 +103,8 @@ namespace Weland
         {
             Context.Save();
 
-	    Context.MoveTo(new PointD(p.X - 0.5, p.Y - 0.5));
-            Context.LineTo(new PointD(p.X + 1.5, p.Y - 0.5));
-            Context.LineTo(new PointD(p.X + 1.5, p.Y + 1.5));
-            Context.LineTo(new PointD(p.X - 0.5, p.Y + 1.5));
+            double radius = vertexSize / 2;
+            Context.Rectangle(p.X + 0.5 - radius, p.Y + 0.5 - radius, vertexSize, vertexSize);
             Context.SetSourceRGBA(c.R, c.G, c.B, 1.0);
             Context.Fill();
 
@@ -129,13 +132,23 @@ namespace Weland
 
         public override void DrawLine(Color c, Point p1, Point p2)
         {
+            StrokeLine(c, p1, p2, lineWidth);
+        }
+
+        public override void DrawGridLine(Color c, Point p1, Point p2)
+        {
+            StrokeLine(c, p1, p2, 1);
+        }
+
+        void StrokeLine(Color c, Point p1, Point p2, double width)
+        {
             Context.Save();
 
             Context.MoveTo(new PointD(p1.X + 0.5, p1.Y + 0.5));
             Context.LineTo(new PointD(p2.X + 0.5, p2.Y + 0.5));
             Context.ClosePath();
             Context.SetSourceRGB(c.R, c.G, c.B);
-            Context.LineWidth = 1.0;
+            Context.LineWidth = width;
             Context.Stroke();
 
             Context.Restore();

@@ -18,8 +18,24 @@ namespace Weland
             {
                 alephOneButton.Action = FileChooserAction.SelectFolder;
             }
+            var drawOptions = (Box)antialias.Parent;
+            lineWidth = AddSizeOption(drawOptions, "Line width (px)", 1, 8);
+            vertexSize = AddSizeOption(drawOptions, "Vertex size (px)", 2, 16);
             area = drawingArea;
             editor = theEditor;
+        }
+
+        readonly SpinButton lineWidth;
+        readonly SpinButton vertexSize;
+
+        static SpinButton AddSizeOption(Box parent, string label, int min, int max)
+        {
+            var row = new Box(Orientation.Horizontal, 12) { MarginTop = 6 };
+            row.PackStart(new Label(label) { Xalign = 0 }, true, true, 0);
+            var spin = new SpinButton(min, max, 1) { Numeric = true, WidthChars = 3 };
+            row.PackStart(spin, false, false, 0);
+            parent.PackStart(row, false, false, 0);
+            return spin;
         }
 
         Gdk.RGBA ToGDK(Drawer.Color color)
@@ -64,6 +80,8 @@ namespace Weland
             showHiddenVertices.Active = Weland.Settings.GetSetting("MapWindow/ShowHiddenVertices", true);
             rememberDeletedSides.Active = Weland.Settings.GetSetting("Editor/RememberDeletedSides", false);
 
+            lineWidth.Value = area.LineWidth;
+            vertexSize.Value = area.VertexSize;
             LoadColors(area);
             selectionDistance.Value = editor.DefaultSnapDistance;
             objectDistance.Value = editor.ObjectSnapDistance;
@@ -78,6 +96,10 @@ namespace Weland
             dialog1.Show();
             if (dialog1.Run() == (int)ResponseType.Ok)
             {
+                area.LineWidth = lineWidth.ValueAsInt;
+                area.VertexSize = vertexSize.ValueAsInt;
+                Weland.Settings.PutSetting("Drawer/LineWidth", area.LineWidth);
+                Weland.Settings.PutSetting("Drawer/VertexSize", area.VertexSize);
                 Weland.Settings.PutSetting("Drawer/SmoothLines", antialias.Active);
                 Weland.Settings.PutSetting("MapWindow/ShowHiddenVertices", showHiddenVertices.Active);
                 Weland.Settings.PutSetting("Editor/RememberDeletedSides", rememberDeletedSides.Active);

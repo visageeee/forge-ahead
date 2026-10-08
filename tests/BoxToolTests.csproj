@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <StartupObject>BoxToolTests</StartupObject>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="BoxToolTests.cs" />
+    <Compile Include="../level/*.cs" />
+    <Compile Include="../shapes/ShapeDescriptor.cs" />
+    <Compile Include="../BinaryReaderBE.cs;../BinaryWriterBE.cs;../CrcStream.cs;../Wadfile.cs;../Geometry.cs;../BoxGeometry.cs;../SelectionBox.cs;../NestedBox.cs;../CircleTool.cs;../MoveTool.cs;../Editor.cs;../Settings.cs" />
+  </ItemGroup>
+</Project>

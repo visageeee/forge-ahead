@@ -2079,11 +2079,26 @@
                   </packing>
                 </child>
                 <child>
+                  <object class="GtkRadioToolButton" id="panButton">
+                    <property name="use-action-appearance">False</property>
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Pan (D)</property>
+                    <property name="label" translatable="yes">Pan</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
                   <object class="GtkRadioToolButton" id="moveButton">
                     <property name="use-action-appearance">False</property>
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="tooltip-text" translatable="yes">Move (D)</property>
+                    <property name="tooltip-text" translatable="yes">Move Selection (M)</property>
                     <property name="label" translatable="yes">Move</property>
                     <property name="group">selectButton</property>
                     <signal name="toggled" handler="OnChooseTool" swapped="no"/>
@@ -2100,6 +2115,36 @@
                     <property name="can-focus">False</property>
                     <property name="tooltip-text" translatable="yes">Draw Lines (L)</property>
                     <property name="label" translatable="yes">Draw Lines</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkRadioToolButton" id="boxButton">
+                    <property name="use-action-appearance">False</property>
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Draw Box Polygon (B): drag opposite corners</property>
+                    <property name="label" translatable="yes">Draw Box Polygon</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkRadioToolButton" id="circleButton">
+                    <property name="use-action-appearance">False</property>
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Draw Circle Polygon (C)</property>
+                    <property name="label" translatable="yes">Draw Circle Polygon</property>
                     <property name="group">selectButton</property>
                     <signal name="toggled" handler="OnChooseTool" swapped="no"/>
                   </object>

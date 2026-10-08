@@ -34,6 +34,10 @@ namespace Weland
         public abstract void Clear(Color c);
         public abstract void DrawPoint(Color c, Point p);
         public abstract void DrawLine(Color c, Point p1, Point p2);
+        public virtual void DrawGridLine(Color c, Point p1, Point p2)
+        {
+            DrawLine(c, p1, p2);
+        }
         public abstract void FillPolygon(Color c, List<Point> points);
         public abstract void TexturePolygon(ShapeDescriptor d, List<Point> points);
         public abstract void FillStrokePolygon(Color fill, Color stroke, List<Point> points, bool dashed);

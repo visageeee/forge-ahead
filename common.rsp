@@ -13,6 +13,12 @@ Drawer.cs
 Editor.cs
 gtk-sharp/GdkDrawer.cs
 Geometry.cs
+BoxGeometry.cs
+SelectionBox.cs
+NestedBox.cs
+CircleTool.cs
+MoveTool.cs
+gtk-sharp/CircleOptions.cs
 mac/IgeMacMenu.cs
 mac/IgeMacMenuGroup.cs
 gtk-sharp/ImageUtilities.cs
@@ -78,6 +84,9 @@ gtk-sharp/Widgets.cs
 /resource:images/invinc.png
 /resource:images/keycard.png
 /resource:images/liquids.png
+/resource:images/move-selection.svg
+/resource:images/circle.svg
+/resource:images/box.svg
 /resource:images/line.png
 /resource:images/media-light.png
 /resource:images/monster.png
