@@ -70,8 +70,15 @@ Vertices snap to nearby existing vertices. Shared edges are reused, and partial
 shared edges are split without duplicate vertices or lines. Invalid overlaps,
 crossings, concave snapping results, and polygon-limit violations are blocked
 with an explanation in the status bar. **Escape** cancels. Creation is one
-undoable action. Circle insets into existing polygons are currently blocked;
-automatic inset subdivision remains specific to the Box tool.
+undoable action. Circles can also inset within an existing normal polygon,
+including at edges and corners. The inset keeps the original polygon index;
+surrounding pieces are merged into convex regions within the eight-vertex limit.
+
+Circle insets preserve floor and ceiling settings, boundary textures, neighboring
+connections, objects and annotations, just like Box insets. Objects outside the
+actual circle are assigned to surrounding polygons. Nested circle and box insets
+are supported. Shapes must remain within one normal polygon; crossing walls,
+special polygon types and conflicting internal geometry are rejected.
 
 # Move and Pan
 
@@ -128,3 +135,54 @@ Edge and corner insets reuse perimeter vertices and lines. A box spanning the
 full width or height can divide the surrounding area into disconnected regions;
 each region is filled with valid convex polygons. Boxes extending outside the
 container or crossing into neighboring polygons remain blocked.
+
+## Undo and history
+
+The lower-right History panel keeps up to 100 actions. Use its Undo and Redo buttons, or click a history entry to return to that state. Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes.
+
+A drag counts as one action. Failed operations and edits that change nothing do not add steps. Editing after undo discards the redo branch. Undo and redo restore map contents and the associated selection.
+
+History resets when opening or switching maps and is not saved in the map file. When the limit is reached, “Earlier state” is the oldest retained state.
+
+## Wall cleanup and paving
+
+Special → Clean Up Wall Surfaces repairs wall side references, removes opaque textures from former exterior walls that now form open passages, and fills missing visible wall, floor and ceiling textures. Transparent wall textures are retained. Cleanup is undoable.
+
+Pave Level runs the same cleanup and fills only missing visible wall, floor and ceiling textures. Existing textures, lighting, texture effects and transparent window/grate textures are retained. Clean Up Wall Surfaces also only fills missing textures. Open passages between equal-height polygons have no opaque wall surface to pave.
+
+## Rotate tool
+
+Select vertices, lines or polygons, then choose Rotate (R). Drag around the cross marking the selection's bounding-box center to rotate about the vertical axis. Hold Shift to snap to 15-degree increments. Start the drag away from the center for immediate rotation.
+
+Selected polygons carry their objects and annotations along; player and monster facings rotate too. Shared endpoints rotate once, and each drag is one undo/redo step. A single selected vertex remains in place. Rotations that exceed map coordinate limits are ignored. Right-drag still moves the selection.
+
+## Scale tool
+
+Select vertices, lines or polygons, then choose Scale (S). Drag away from the center cross to enlarge the selection, or toward it to shrink it proportionally. Hold Shift to snap the scale factor to 10% increments. Start the drag away from the center.
+
+Selected polygons carry their objects and annotations; object facing and polygon heights stay unchanged. Shared endpoints scale once, and each drag is one undo/redo step. Scaling that would collapse vertices, lines or polygons, or exceed map coordinate limits, is ignored. Right-drag still moves the selection.
+
+Paving uses an available wall collection from the loaded Shapes file and palette zero, rather than assuming the stock scenario's bitmap indices exist. Paving skips uniform-color placeholder bitmaps. If stock default indices are placeholders or absent, it chooses detailed bitmaps from that wall collection instead. If no wall collection is loaded, Pave, cleanup and Nuke Textures leave the map unchanged and explain how to load Shapes.
+# MML export
+
+Use **Special → Export Level MML…** to generate an Aleph One `.mml` script.
+Collection loading has the engine's seven slots for the level's texture environment:
+`-2` keeps the current scenario mapping, `-1` clears a slot, and `0–31` loads that
+collection. Suggested extras use standard M2/Infinity mapping and leave the first
+three scenario slots unchanged; check them against custom scenario MML. If more
+than four extra collections are found, no automatic suggestion is applied: assign
+the seven slots manually. Scenery collections must be chosen manually because the
+editor does not know a custom scenario's scenery-to-collection mappings. Loading
+a collection does not define new scenery types or combine different Shapes files.
+
+Above-liquid and below-liquid fog each have an inclusion checkbox, enable switch,
+color, depth in world units, and landscape toggle. Unchecked inclusion leaves the
+scenario's fog unchanged. Include settings with fog disabled to explicitly turn
+that fog off. Export does not modify the map or replace existing scripts.
+
+Put the exported file in the scenario's **Scripts** folder and restart Aleph One.
+External collection settings affect all levels using that texture environment;
+fog affects all levels while the script is loaded. For settings limited to a single
+level, embed the MML with Atque. Custom scenarios may need to merge these entries
+into their existing scripts to control loading order. Fog is visible in Aleph One,
+not in the editor's 2D view. This initial export dialog does not import scripts.

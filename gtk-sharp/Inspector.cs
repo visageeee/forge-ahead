@@ -256,6 +256,7 @@ namespace Weland
         protected void OnObjectChanged(object obj, EventArgs args)
         {
             if (!applyChanges) return;
+            editor.SetUndo("Edit object");
             MapObject mapObject = Level.Objects[selection.Object];
 
             // decrement item and monster initial counts
@@ -366,6 +367,8 @@ namespace Weland
             }
 
             RedrawSelectedObject();
+            editor.Changed = true;
+            RefreshHistory();
         }
 
         protected void OnPlatformParameters(object obj, EventArgs args)
@@ -385,6 +388,7 @@ namespace Weland
         protected void OnPolygonChanged(object obj, EventArgs args)
         {
             if (!applyChanges) return;
+            editor.SetUndo("Edit polygon");
 
             Polygon polygon = Level.Polygons[selection.Polygon];
             switch (polygon.Type)
@@ -429,21 +433,27 @@ namespace Weland
                     }
                     break;
             }
+            editor.Changed = true;
+            RefreshHistory();
         }
 
         protected void OnObjectTypeChanged(object obj, EventArgs args)
         {
             if (!applyChanges) return;
+            editor.SetUndo("Change object type");
 
             editor.SetObjectType(Level.Objects[selection.Object], (ObjectType)objectGroup.Active);
 
             RedrawSelectedObject();
             UpdateInspector();
+            editor.Changed = true;
+            RefreshHistory();
         }
 
         protected void OnPolygonTypeChanged(object obj, EventArgs args)
         {
             if (!applyChanges) return;
+            editor.SetUndo("Change polygon type");
 
             Polygon polygon = Level.Polygons[selection.Polygon];
             if (polygon.Type != (PolygonType)polygonType.Active)
@@ -457,6 +467,8 @@ namespace Weland
                 editor.ScanPlatforms();
             }
             UpdateInspector();
+            editor.Changed = true;
+            RefreshHistory();
         }
 
         protected void OnUseLightToggled(object obj, EventArgs args)

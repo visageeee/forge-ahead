@@ -829,7 +829,35 @@ namespace Weland
                 polygon.CeilingLight = adjacent.CeilingLight;
             }
             UpdatePolygonConcavity(polygon);
+            UpdatePolygonWallReferences();
             return true;
+        }
+
+        // Lines are the authoritative owners of wall sides. Keep the polygon
+        // edge records in sync after creating, splitting or removing geometry.
+        void UpdatePolygonWallReferences()
+        {
+            for (int i = 0; i < Polygons.Count; ++i)
+            {
+                Polygon polygon = Polygons[i];
+                for (int edge = 0; edge < Polygon.MaxVertexCount; ++edge)
+                {
+                    polygon.AdjacentPolygonIndexes[edge] = -1;
+                    polygon.SideIndexes[edge] = -1;
+                    if (edge >= polygon.VertexCount) continue;
+                    short lineIndex = polygon.LineIndexes[edge];
+                    Line line = Lines[lineIndex];
+                    bool clockwise = line.ClockwisePolygonOwner == i;
+                    polygon.AdjacentPolygonIndexes[edge] = clockwise ? line.CounterclockwisePolygonOwner : line.ClockwisePolygonOwner;
+                    short sideIndex = clockwise ? line.ClockwisePolygonSideIndex : line.CounterclockwisePolygonSideIndex;
+                    polygon.SideIndexes[edge] = sideIndex;
+                    if (sideIndex != -1)
+                    {
+                        Sides[sideIndex].LineIndex = lineIndex;
+                        Sides[sideIndex].PolygonIndex = (short)i;
+                    }
+                }
+            }
         }
 
         public void UpdatePolygonConcavity(Polygon polygon)
@@ -1379,6 +1407,10 @@ namespace Weland
                         side.Type = SideType.High;
                     }
                 }
+                else
+                {
+                    side.Type = SideType.Full;
+                }
             }
         }
 
@@ -1452,11 +1484,11 @@ namespace Weland
             return side_index;
         }
 
-        void PaveSide(Side side, byte collection)
+        void PaveSide(Side side, ShapeDescriptor wallTexture, bool overwriteExisting)
         {
-            const int wall = 5;
             FixSideType(side);
-            if (side.Primary.Texture.IsEmpty())
+            bool primaryMissing = side.Primary.Texture.IsEmpty();
+            if (overwriteExisting || primaryMissing)
             {
                 if (side.Type == SideType.Full)
                 {
@@ -1476,31 +1508,26 @@ namespace Weland
                     }
                     if (opposite == null || opposite.FloorHeight > adjacent.CeilingHeight || opposite.CeilingHeight < adjacent.FloorHeight)
                     {
-                        side.Primary.Texture.Collection = collection;
-                        side.Primary.Texture.Bitmap = wall;
-                        side.PrimaryTransferMode = 0;
-                        side.PrimaryLightsourceIndex = 0;
+                        side.Primary.Texture = wallTexture;
+                        if (primaryMissing) { side.PrimaryTransferMode = 0; side.PrimaryLightsourceIndex = 0; }
                     }
                 }
                 else
                 {
-                    side.Primary.Texture.Collection = collection;
-                    side.Primary.Texture.Bitmap = wall;
-                    side.PrimaryTransferMode = 0;
-                    side.PrimaryLightsourceIndex = 0;
+                    side.Primary.Texture = wallTexture;
+                    if (primaryMissing) { side.PrimaryTransferMode = 0; side.PrimaryLightsourceIndex = 0; }
                 }
             }
-            if (side.Type == SideType.Split && side.Secondary.Texture.IsEmpty())
+            bool secondaryMissing = side.Secondary.Texture.IsEmpty();
+            if (side.Type == SideType.Split && (overwriteExisting || secondaryMissing))
             {
-                side.Secondary.Texture.Collection = collection;
-                side.Secondary.Texture.Bitmap = wall;
-                side.SecondaryTransferMode = 0;
-                side.SecondaryLightsourceIndex = 0;
+                side.Secondary.Texture = wallTexture;
+                if (secondaryMissing) { side.SecondaryTransferMode = 0; side.SecondaryLightsourceIndex = 0; }
             }
 
             if (side.IsControlPanel && side.IsPlatformSwitch())
             {
-                if (side.ControlPanelPermutation < 0 || side.ControlPanelPermutation > Polygons.Count || Polygons[side.ControlPanelPermutation].Type != PolygonType.Platform)
+                if (side.ControlPanelPermutation < 0 || side.ControlPanelPermutation >= Polygons.Count || Polygons[side.ControlPanelPermutation].Type != PolygonType.Platform)
                 {
                     side.IsControlPanel = false;
                 }
@@ -1528,11 +1555,62 @@ namespace Weland
             }
         }
 
+        public void CleanupWallSurfaces()
+        {
+            // Rebind valid sides from line ownership before checking their
+            // cached IDs: older edits can leave those IDs stale or unset.
+            var used = new HashSet<short>();
+            for (short i = 0; i < Lines.Count; ++i)
+            {
+                Line line = Lines[i];
+                for (int direction = 0; direction < 2; ++direction)
+                {
+                    short owner = direction == 0 ? line.ClockwisePolygonOwner : line.CounterclockwisePolygonOwner;
+                    short index = direction == 0 ? line.ClockwisePolygonSideIndex : line.CounterclockwisePolygonSideIndex;
+                    if (owner < 0 || owner >= Polygons.Count || index < 0 || index >= Sides.Count || !used.Add(index))
+                    {
+                        if (direction == 0) line.ClockwisePolygonSideIndex = -1;
+                        else line.CounterclockwisePolygonSideIndex = -1;
+                        continue;
+                    }
+                    Side side = Sides[index]; side.LineIndex = i; side.PolygonIndex = owner;
+                    short oppositeIndex = direction == 0 ? line.CounterclockwisePolygonOwner : line.ClockwisePolygonOwner;
+                    if (oppositeIndex >= 0 && oppositeIndex < Polygons.Count)
+                    {
+                        Polygon adjacent = Polygons[owner], opposite = Polygons[oppositeIndex];
+                        if (adjacent.Type != PolygonType.Platform && opposite.Type != PolygonType.Platform &&
+                            adjacent.FloorHeight >= opposite.FloorHeight && adjacent.CeilingHeight <= opposite.CeilingHeight)
+                        {
+                            // An old outer wall is now an open portal. Its opaque
+                            // textures no longer describe a drawable surface.
+                            side.Primary.Texture = ShapeDescriptor.Empty;
+                            side.Secondary.Texture = ShapeDescriptor.Empty;
+                            if (side.Transparent.Texture.IsEmpty() && !side.IsControlPanel) used.Remove(index);
+                        }
+                    }
+                    FixSideType(side);
+                }
+            }
+            for (int i = Sides.Count - 1; i >= 0; --i)
+                if (!used.Contains((short)i)) DeleteSide((short)i);
+            UpdatePolygonWallReferences();
+        }
+
         public void Pave()
         {
+            Pave(false);
+        }
+
+        public void Pave(bool overwriteExisting)
+        {
             byte collection = (byte)(Environment + 17);
-            const int floor = 6;
-            const int ceiling = 7;
+            Pave(overwriteExisting, new ShapeDescriptor((ushort)(collection << 8 | 5)),
+                new ShapeDescriptor((ushort)(collection << 8 | 6)), new ShapeDescriptor((ushort)(collection << 8 | 7)));
+        }
+
+        public void Pave(bool overwriteExisting, ShapeDescriptor wallTexture, ShapeDescriptor floorTexture, ShapeDescriptor ceilingTexture)
+        {
+            CleanupWallSurfaces();
 
             for (int i = Sides.Count - 1; i >= 0; --i)
             {
@@ -1583,31 +1661,32 @@ namespace Weland
 
                 if (cw_side != null)
                 {
-                    PaveSide(cw_side, collection);
+                    PaveSide(cw_side, wallTexture, overwriteExisting);
                 }
 
                 if (ccw_side != null)
                 {
-                    PaveSide(ccw_side, collection);
+                    PaveSide(ccw_side, wallTexture, overwriteExisting);
                 }
             }
 
             foreach (Polygon polygon in Polygons)
             {
-                if (polygon.FloorTexture.IsEmpty())
+                bool floorMissing = polygon.FloorTexture.IsEmpty();
+                if (overwriteExisting || floorMissing)
                 {
-                    polygon.FloorTexture.Collection = collection;
-                    polygon.FloorTexture.Bitmap = floor;
-                    polygon.FloorTransferMode = 0;
+                    polygon.FloorTexture = floorTexture;
+                    if (floorMissing) polygon.FloorTransferMode = 0;
                 }
 
-                if (polygon.CeilingTexture.IsEmpty())
+                bool ceilingMissing = polygon.CeilingTexture.IsEmpty();
+                if (overwriteExisting || ceilingMissing)
                 {
-                    polygon.CeilingTexture.Collection = collection;
-                    polygon.CeilingTexture.Bitmap = ceiling;
-                    polygon.CeilingTransferMode = 0;
+                    polygon.CeilingTexture = ceilingTexture;
+                    if (ceilingMissing) polygon.CeilingTransferMode = 0;
                 }
             }
+            UpdatePolygonWallReferences();
         }
 
         public List<Polygon> AdjacentPolygons(Polygon polygon)

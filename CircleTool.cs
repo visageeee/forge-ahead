@@ -26,6 +26,7 @@ namespace Weland
 
         public void StartCircle(short X, short Y)
         {
+            CommitHistory();
             CancelCircle();
             Selection.Clear();
             CircleStart = SnapBoxPoint(X, Y);
@@ -71,7 +72,7 @@ namespace Weland
             SetUndo();
             if (Level.CreateCirclePolygon(CircleVertices, out reason))
             {
-                Selection.Polygon = (short)(Level.Polygons.Count - 1);
+                Selection.Polygon = Level.LastCreatedCirclePolygonIndex;
                 CircleMessage = null;
                 Changed = true;
             }
@@ -117,7 +118,43 @@ namespace Weland
             return ring;
         }
 
+        public short LastCreatedCirclePolygonIndex { get; private set; } = -1;
+
         public bool CanCreateCirclePolygon(List<Point> corners, out string reason)
+        {
+            if (CanCreatePlainShape(corners, out reason)) return true;
+            // Invalid or snapped concave rings must not enter the inset planner.
+            if (corners.Count < 3 || corners.Count > Polygon.MaxVertexCount) return false;
+            for (int i = 0; i < corners.Count; ++i)
+                for (int j = 0; j < corners.Count; ++j)
+                    if (j != i && j != (i + 1) % corners.Count &&
+                        ShapeCross(corners[i], corners[(i + 1) % corners.Count], corners[j]) <= 0) return false;
+            short container = ShapeContainer(corners);
+            if (container == -1) return false;
+            if (!Filter(Polygons[container]))
+            { reason = "Circle overlaps geometry hidden by the current view filter."; return false; }
+            if (Polygons[container].Type != PolygonType.Normal)
+            { reason = "Circle insets currently require a normal polygon."; return false; }
+            var trial = new Level(); trial.Load(Save().Clone());
+            return trial.SplitInset(container, corners, out reason);
+        }
+
+        public bool CreateCirclePolygon(List<Point> corners, out string reason)
+        {
+            if (CanCreatePlainShape(corners, out reason))
+            {
+                if (!CreatePlainShape(corners, out reason)) return false;
+                LastCreatedCirclePolygonIndex = (short)(Polygons.Count - 1);
+                return true;
+            }
+            short container = ShapeContainer(corners);
+            if (container == -1 || !CanCreateCirclePolygon(corners, out reason)) return false;
+            if (!SplitInset(container, corners, out reason)) return false;
+            LastCreatedCirclePolygonIndex = container;
+            return true;
+        }
+
+        bool CanCreatePlainShape(List<Point> corners, out string reason)
         {
             reason = null;
             if (corners.Count < 3 || corners.Count > Polygon.MaxVertexCount)
@@ -183,9 +220,9 @@ namespace Weland
             return true;
         }
 
-        public bool CreateCirclePolygon(List<Point> corners, out string reason)
+        bool CreatePlainShape(List<Point> corners, out string reason)
         {
-            if (!CanCreateCirclePolygon(corners, out reason)) return false;
+            if (!CanCreatePlainShape(corners, out reason)) return false;
             List<Point> ring = CircleRing(corners);
             var indexes = new List<short>();
             foreach (Point p in ring)

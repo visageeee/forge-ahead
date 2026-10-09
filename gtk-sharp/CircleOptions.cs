@@ -23,7 +23,11 @@ namespace Weland
             contents.PackStart(new Label("Drag opposite corners.\nHold Shift for a circle.\n3–8 sides per polygon.") { Xalign = 0 }, false, false, 0);
             circleOptions.Add(contents);
             contents.ShowAll();
-            grid1.Attach(circleOptions, 5, 0, 1, 1);
+            var sidebar = new Box(Orientation.Vertical, 6) { WidthRequest = 240, Vexpand = true };
+            sidebar.PackStart(circleOptions, false, false, 0);
+            SetupHistory(sidebar);
+            grid1.Attach(sidebar, 5, 0, 1, 1);
+            sidebar.ShowAll();
             circleOptions.Hide();
         }
     }

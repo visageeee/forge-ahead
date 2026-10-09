@@ -73,6 +73,8 @@ namespace Weland
         [Widget] RadioToolButton zoomButton;
         [Widget] RadioToolButton panButton;
         [Widget] RadioToolButton moveButton;
+        [Widget] RadioToolButton rotateButton;
+        [Widget] RadioToolButton scaleButton;
         [Widget] RadioToolButton lineButton;
         [Widget] RadioToolButton boxButton;
         [Widget] RadioToolButton circleButton;
@@ -197,6 +199,8 @@ namespace Weland
             SetIconResource(zoomButton, "zoom.png");
             SetIconResource(panButton, "move.png");
             SetIconResource(moveButton, "move-selection.svg");
+            SetIconResource(rotateButton, "rotate.svg");
+            SetIconResource(scaleButton, "scale.svg");
             SetIconResource(lineButton, "line.png");
             SetIconResource(boxButton, "box.svg");
             SetIconResource(circleButton, "circle.svg");
@@ -442,12 +446,14 @@ namespace Weland
 
         void Redraw()
         {
+            RefreshHistory();
             drawingArea.QueueDrawArea(0, 0, drawingArea.Allocation.Width, drawingArea.Allocation.Height);
             editor.ClearDirty();
         }
 
         void RedrawDirty()
         {
+            RefreshHistory();
             const int dirtySlop = 12;
             if (editor.Dirty)
             {
@@ -599,6 +605,7 @@ namespace Weland
             d.Text = annotation.Text;
             if (d.Run() == (int)ResponseType.Ok)
             {
+                editor.SetUndo("Edit annotation");
                 annotation.Text = d.Text;
                 editor.Changed = true;
                 Redraw();
@@ -655,6 +662,7 @@ namespace Weland
             {
                 if (selection.Line != -1)
                 {
+                    editor.SetUndo("Edit line parameters");
                     LineParametersDialog d = new LineParametersDialog(window1, Level, Level.Lines[selection.Line]);
                     d.Run();
                     editor.Changed = true;
@@ -662,6 +670,7 @@ namespace Weland
                 }
                 else if (selection.Point != -1)
                 {
+                    editor.SetUndo("Edit vertex parameters");
                     PointParametersDialog d = new PointParametersDialog(window1, Level, selection.Point);
                     d.Run();
                     editor.Changed = true;
@@ -816,6 +825,11 @@ namespace Weland
                 }
                 else if ((args.Event.State & ModifierType.MetaMask) != 0 || (args.Event.State & ModifierType.Mod1Mask) != 0)
                 {
+                    if (args.Event.Key == Gdk.Key.z && (args.Event.State & ModifierType.ShiftMask) != 0)
+                    {
+                        OnRedo(null, null);
+                        return;
+                    }
                     if (HandleMacAccelerator(args.Event.Key))
                     {
                         return;
@@ -947,6 +961,19 @@ namespace Weland
                 case Gdk.Key.M:
                     moveButton.Active = true;
                     break;
+                case Gdk.Key.r:
+                case Gdk.Key.R:
+                    rotateButton.Active = true;
+                    break;
+                case Gdk.Key.s:
+                case Gdk.Key.S:
+                    if ((args.Event.State & (ModifierType.ControlMask | ModifierType.MetaMask | ModifierType.Mod1Mask)) != 0)
+                    {
+                        caught = false;
+                        break;
+                    }
+                    scaleButton.Active = true;
+                    break;
                 case Gdk.Key.t:
                     annotationButton.Active = true;
                     break;
@@ -1072,7 +1099,7 @@ namespace Weland
             {
                 MenuItem item = new MenuItem(Weland.plugins.GetName(i));
                 int pluginNumber = i;
-                item.Activated += delegate (object obj, EventArgs args) { Weland.plugins.GtkRun(editor, pluginNumber); Redraw(); };
+                item.Activated += delegate (object obj, EventArgs args) { editor.SetUndo("Run plugin"); Weland.plugins.GtkRun(editor, pluginNumber); Redraw(); };
                 menu.Append(item);
             }
 
@@ -1308,6 +1335,14 @@ namespace Weland
             else if (button == moveButton)
             {
                 ChooseTool(Tool.Move);
+            }
+            else if (button == rotateButton)
+            {
+                ChooseTool(Tool.Rotate);
+            }
+            else if (button == scaleButton)
+            {
+                ChooseTool(Tool.Scale);
             }
             else if (button == lineButton)
             {
@@ -1604,7 +1639,7 @@ namespace Weland
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
             }
-            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Object || tool == Tool.Annotation)
+            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Cross);
             }
@@ -1796,8 +1831,7 @@ namespace Weland
         internal void OnUndo(object o, EventArgs e)
         {
             editor.Undo();
-            ChooseTool(editor.Tool);
-            Redraw();
+            AfterHistoryNavigation();
         }
 
         internal void OnQuit(object o, EventArgs e)
@@ -2083,6 +2117,7 @@ namespace Weland
 
         protected void OnLevelParameters(object o, EventArgs e)
         {
+            editor.SetUndo("Edit level parameters");
             LevelParametersDialog d = new LevelParametersDialog(window1, Level);
             if (d.Run() == (int)ResponseType.Ok)
             {
@@ -2090,43 +2125,72 @@ namespace Weland
                 window1.Title = Level.Name;
                 BuildLevelMenu();
             }
+            Redraw();
         }
 
         protected void OnItemParameters(object o, EventArgs e)
         {
+            editor.SetUndo("Edit item placement");
             ItemParametersDialog d = new ItemParametersDialog(window1, Level);
             if (d.Run() == (int)ResponseType.Ok)
             {
                 editor.Changed = true;
             }
+            Redraw();
         }
 
         protected void OnMonsterParameters(object o, EventArgs e)
         {
+            editor.SetUndo("Edit monster placement");
             MonsterParametersDialog d = new MonsterParametersDialog(window1, Level);
             if (d.Run() == (int)ResponseType.Ok)
             {
                 editor.Changed = true;
             }
+            Redraw();
+        }
+
+        bool TryGetPaveTextures(out ShapeDescriptor wall, out ShapeDescriptor floor, out ShapeDescriptor ceiling)
+        {
+            if (PaveTextureSelection.TryChoose(Weland.Shapes, Level.Environment + 17, out wall, out floor, out ceiling)) return true;
+            using var dialog = new MessageDialog(window1, DialogFlags.Modal, MessageType.Error, ButtonsType.Close,
+                "No suitable wall textures are available in the loaded Shapes file. Choose your scenario's Shapes file in Preferences before paving.");
+            dialog.Run();
+            return false;
         }
 
         protected void OnPave(object o, EventArgs e)
         {
-            Level.Pave();
+            if (!TryGetPaveTextures(out ShapeDescriptor wall, out ShapeDescriptor floor, out ShapeDescriptor ceiling)) return;
+            editor.SetUndo("Pave map");
+            Level.Pave(false, wall, floor, ceiling);
             editor.Changed = true;
+            Redraw();
+        }
+
+        protected void OnCleanupWallSurfaces(object o, EventArgs e)
+        {
+            if (!TryGetPaveTextures(out ShapeDescriptor wall, out ShapeDescriptor floor, out ShapeDescriptor ceiling)) return;
+            editor.SetUndo("Clean up wall surfaces");
+            Level.Pave(false, wall, floor, ceiling);
+            editor.Changed = true;
+            UpdateInspector();
+            Redraw();
         }
 
         protected void OnNukeTextures(object o, EventArgs e)
         {
-            editor.SetUndo();
+            if (!TryGetPaveTextures(out ShapeDescriptor wall, out ShapeDescriptor floor, out ShapeDescriptor ceiling)) return;
+            editor.SetUndo("Remove textures");
             Level.NukeTextures();
-            Level.Pave();
+            Level.Pave(true, wall, floor, ceiling);
             editor.Changed = true;
+            Redraw();
         }
 
         protected void OnNukeObjects(object o, EventArgs e)
         {
-            editor.SetUndo();
+            editor.SetUndo("Remove objects");
             Level.NukeObjects();
             editor.Selection.Object = -1;
             editor.Changed = true;
@@ -2158,6 +2222,7 @@ namespace Weland
 
         protected void OnPaletteAdd(object o, EventArgs e)
         {
+            editor.SetUndo("Add palette item");
             if (editor.Tool == Tool.FloorHeight)
             {
                 using var dialog = new DoubleDialog("Add Floor Height", window1);
@@ -2242,6 +2307,7 @@ namespace Weland
 
         void PaletteEdit()
         {
+            editor.SetUndo("Edit palette item");
             if (editor.Tool == Tool.FloorHeight)
             {
                 short original_height = editor.PaintIndex;

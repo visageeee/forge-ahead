@@ -430,6 +430,7 @@ namespace Weland
 
         public Wadfile.DirectoryEntry Save()
         {
+            UpdatePolygonWallReferences();
             Wadfile.DirectoryEntry wad = new Wadfile.DirectoryEntry();
             wad.Chunks = Chunks;
             wad.Chunks[MapInfo.Tag] = SaveChunk(mapInfo);

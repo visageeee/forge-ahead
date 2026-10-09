@@ -225,13 +225,13 @@ namespace Weland
                                                    ClampCoordinate(anchor.Y + Math.Sign(Y) * step)));
                 dx = target.X - anchor.X; dy = target.Y - anchor.Y;
             }
-            SetUndo();
+            SetUndo("Nudge selection");
             TranslateMultiple(points, ref dx, ref dy);
         }
 
         void DeleteMultiple()
         {
-            SetUndo();
+            SetUndo("Delete selection");
             ClearHover();
             var polygons = new List<Polygon>();
             foreach (short index in Selection.Polygons) polygons.Add(Level.Polygons[index]);

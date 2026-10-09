@@ -63,6 +63,36 @@ namespace Weland
             return -1;
         }
 
+        short ShapeContainer(List<Point> corners)
+        {
+            if (corners.Count < 3) return -1;
+            for (int i = 0; i < Polygons.Count; ++i)
+            {
+                Polygon polygon = Polygons[i];
+                if (polygon.VertexCount < 3) continue;
+                bool contains = true, equalBoundary = true;
+                foreach (Point p in corners)
+                {
+                    bool boundary = false;
+                    for (int e = 0; e < polygon.VertexCount; ++e)
+                        if (OnSegment(p, Endpoints[polygon.EndpointIndexes[e]], Endpoints[polygon.EndpointIndexes[(e + 1) % polygon.VertexCount]])) boundary = true;
+                    if (!boundary) equalBoundary = false;
+                    if (!boundary && !ContainsBoxCenter(polygon, p.X, p.Y)) { contains = false; break; }
+                }
+                for (int e = 0; contains && e < polygon.VertexCount; ++e)
+                {
+                    Point a = Endpoints[polygon.EndpointIndexes[e]], b = Endpoints[polygon.EndpointIndexes[(e + 1) % polygon.VertexCount]];
+                    if (EntersShape(a, b, corners)) contains = false;
+                    bool boundary = false;
+                    for (int c = 0; c < corners.Count; ++c)
+                        if (OnSegment(a, corners[c], corners[(c + 1) % corners.Count])) boundary = true;
+                    if (!boundary) equalBoundary = false;
+                }
+                if (contains && !equalBoundary) return (short)i;
+            }
+            return -1;
+        }
+
         public bool CanCreateBox(Point start, Point end, out string reason)
         {
             if (CanCreatePlainBox(start, end, out reason)) return true;
@@ -93,10 +123,10 @@ namespace Weland
             return SplitBox(container, start, end, out reason);
         }
 
-        // Triangulate a polygon with a rectangular hole. Bridge only existing
+        // Triangulate a polygon with a convex inset hole. Bridge only existing
         // vertices, so no fractional intersections or neighbor wall splits are
         // needed. Ear clipping leaves convex pieces with exact integer geometry.
-        bool InsetPieces(Polygon polygon, short left, short top, short right, short bottom,
+        bool InsetPieces(Polygon polygon, List<Point> inset,
                             out List<List<Point>> triangles, out string reason)
         {
             triangles = new List<List<Point>>();
@@ -114,8 +144,8 @@ namespace Weland
                 return area;
             }
             if (Area(outer) < 0) outer.Reverse();
-            var inner = new List<Point> { new Point(left, top), new Point(left, bottom),
-                                         new Point(right, bottom), new Point(right, top) };
+            var inner = new List<Point>(inset);
+            if (Area(inner) > 0) inner.Reverse();
             bool Blocks(Point a, Point b, Point c, Point d)
             {
                 long ac = ShapeCross(a, b, c), ad = ShapeCross(a, b, d);
@@ -130,6 +160,9 @@ namespace Weland
             foreach (Point p in inner)
                 for (int e = 0; e < outer.Count; ++e)
                     if (OnSegment(p, outer[e], outer[(e + 1) % outer.Count])) touching = true;
+            foreach (Point p in outer)
+                for (int e = 0; e < inner.Count; ++e)
+                    if (OnSegment(p, inner[e], inner[(e + 1) % inner.Count])) touching = true;
             if (touching)
             {
                 if (!EdgeInsetPieces(outer, inner, triangles)) return false;
@@ -147,7 +180,7 @@ namespace Weland
                 {
                     Point a = outer[i], b = inner[j];
                     long distance = ((long)a.X - b.X) * (a.X - b.X) + ((long)a.Y - b.Y) * (a.Y - b.Y);
-                    if (distance >= shortest || EntersBox(a, b, left, top, right, bottom) ||
+                    if (distance >= shortest || EntersShape(a, b, inset) ||
                         !ContainsBoxCenter(polygon, (a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0)) continue;
                     bool blocked = false;
                     for (int e = 0; e < outer.Count; ++e)
@@ -338,13 +371,28 @@ namespace Weland
 
         bool SplitBox(short index, Point start, Point end, out string reason)
         {
-            reason = null;
-            Polygon original = Polygons[index];
-            bool rectangular = RectangleBounds(original, out Point min, out Point max);
             short left = Math.Min(start.X, end.X), right = Math.Max(start.X, end.X);
             short top = Math.Min(start.Y, end.Y), bottom = Math.Max(start.Y, end.Y);
+            var inset = new List<Point> { new Point(left, top), new Point(right, top),
+                new Point(right, bottom), new Point(left, bottom) };
+            return SplitInset(index, inset, out reason);
+        }
+
+        bool SplitInset(short index, List<Point> inset, out string reason)
+        {
+            reason = null;
+            Polygon original = Polygons[index];
+            bool rectangular = RectangleBounds(original, out Point min, out Point max) && inset.Count == 4;
+            short left = short.MaxValue, top = short.MaxValue, right = short.MinValue, bottom = short.MinValue;
+            for (int i = 0; i < inset.Count; ++i)
+            {
+                Point p = inset[i], q = inset[(i + 1) % inset.Count];
+                left = Math.Min(left, p.X); right = Math.Max(right, p.X);
+                top = Math.Min(top, p.Y); bottom = Math.Max(bottom, p.Y);
+                if (p.X != q.X && p.Y != q.Y) rectangular = false;
+            }
             List<List<Point>> pieces = null;
-            if (!rectangular && !InsetPieces(original, left, top, right, bottom, out pieces, out reason)) return false;
+            if (!rectangular && !InsetPieces(original, inset, out pieces, out reason)) return false;
             var walls = new List<BoxWall>();
             // Detach the perimeter without deleting objects, references, or
             // neighboring polygons. Store textured sides before splitting.
@@ -393,10 +441,10 @@ namespace Weland
             {
                 foreach (List<Point> piece in pieces)
                 {
-                    if (!CreateCirclePolygon(piece, out reason)) return false;
+                    if (!CreatePlainShape(piece, out reason)) return false;
                     CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
                 }
-                if (!CreatePlainBox(new Point(left, top), new Point(right, bottom), out reason)) return false;
+                if (!CreatePlainShape(inset, out reason)) return false;
                 CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
             }
             short centerIndex = (short)(Polygons.Count - 1);
@@ -437,7 +485,10 @@ namespace Weland
             {
                 // Inclusive bounds give objects on an internal edge a stable
                 // valid owner, with the inset taking priority.
-                if (p.X >= left && p.X <= right && p.Y >= top && p.Y <= bottom) return index;
+                bool insideInset = true;
+                for (int e = 0; e < inset.Count; ++e)
+                    if (ShapeCross(inset[e], inset[(e + 1) % inset.Count], p) < 0) insideInset = false;
+                if (insideInset) return index;
                 for (int i = first; i < Polygons.Count; ++i)
                 {
                     Polygon polygon = Polygons[i];

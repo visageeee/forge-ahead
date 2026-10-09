@@ -340,6 +340,13 @@ namespace Weland
                     DrawFatPoint(selectedLineColor, Level.Endpoints[Selection.Point]);
                 }
 
+                if (Editor != null && Editor.ShowRotationCenter())
+                {
+                    var center = new Drawer.Point(Transform.ToScreenX((short)Math.Round(Editor.RotationCenterX)), Transform.ToScreenY((short)Math.Round(Editor.RotationCenterY)));
+                    drawer.DrawLine(selectedLineColor, new Drawer.Point(center.X - 6, center.Y), new Drawer.Point(center.X + 6, center.Y));
+                    drawer.DrawLine(selectedLineColor, new Drawer.Point(center.X, center.Y - 6), new Drawer.Point(center.X, center.Y + 6));
+                }
+
                 if (Editor != null && Editor.DrawingCircle)
                 {
                     var points = Editor.CircleVertices;

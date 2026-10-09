@@ -26,7 +26,9 @@ namespace Weland
         VisualMode,
         Box,
         Circle,
-        Move
+        Move,
+        Rotate,
+        Scale
     }
 
     [Flags]
@@ -105,8 +107,6 @@ namespace Weland
         public bool Changed = false;
         public Grid Grid;
         public Selection Selection;
-        Wadfile.DirectoryEntry undoState;
-        Selection undoSelection;
 
         public double Scale;
         public Level Level;
@@ -118,10 +118,13 @@ namespace Weland
             }
             set
             {
+                historyGesture = false;
                 CancelBox();
                 CancelSelectionBox();
                 CancelCircle();
                 CancelMoveTool();
+                CancelRotateTool();
+                CancelScaleTool();
                 ClearHover();
                 tool = value;
                 if (Level.TemporaryLineStartIndex != -1)
@@ -132,6 +135,7 @@ namespace Weland
                     }
                     Level.TemporaryLineStartIndex = -1;
                 }
+                CommitHistory();
                 if (value == Tool.Line)
                 {
                     short selected_point = Selection.Point;
@@ -150,7 +154,7 @@ namespace Weland
                     Selection.Clear();
                     Selection.Annotation = selected_annotation;
                 }
-                else if (value != Tool.Select && value != Tool.Pan && value != Tool.Move)
+                else if (value != Tool.Select && value != Tool.Pan && value != Tool.Move && value != Tool.Rotate && value != Tool.Scale)
                 {
                     Selection.Clear();
                 }
@@ -196,6 +200,7 @@ namespace Weland
 
         public void StartBox(short X, short Y)
         {
+            CommitHistory();
             CancelBox();
             Selection.Clear();
             BoxStart = BoxEnd = SnapBoxPoint(X, Y);
@@ -609,15 +614,10 @@ namespace Weland
         {
             if (!undoSet)
             {
-                Wadfile.DirectoryEntry prevUndo = null;
-                if (undoState != null)
-                {
-                    prevUndo = undoState.Clone();
-                }
                 SetUndo();
                 if (!Level.FillPolygon(X, Y))
                 {
-                    undoState = prevUndo;
+                    CancelPendingUndo();
                 }
                 else
                 {
@@ -795,7 +795,7 @@ namespace Weland
                 return;
             }
             bool changed = true;
-            SetUndo();
+            SetUndo("Nudge selection");
             if (Selection.Point != -1)
             {
                 Point p = Level.Endpoints[Selection.Point];
@@ -1365,7 +1365,9 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            CommitHistory();
             ClearHover();
+            historyGesture = true;
             if (RightClick(mods))
             {
                 downX = lastX = X;
@@ -1523,6 +1525,14 @@ namespace Weland
                 {
                     BeginMoveTool();
                 }
+                else if (Tool == Tool.Rotate)
+                {
+                    BeginRotateTool(X, Y);
+                }
+                else if (Tool == Tool.Scale)
+                {
+                    BeginScaleTool(X, Y);
+                }
                 else if (Tool == Tool.Line)
                 {
                     StartLine(X, Y);
@@ -1563,6 +1573,14 @@ namespace Weland
             if (rightButtonMove || Tool == Tool.Move)
             {
                 UpdateMoveTool(X, Y);
+            }
+            else if (Tool == Tool.Rotate)
+            {
+                UpdateRotateTool(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Scale)
+            {
+                UpdateScaleTool(X, Y, (mods & EditorModifiers.Shift) != 0);
             }
             else if (Tool == Tool.Circle)
             {
@@ -1715,15 +1733,25 @@ namespace Weland
 
         public void ButtonRelease(short X, short Y, EditorModifiers mods)
         {
+            historyGesture = false;
             if (rightButtonMove)
             {
                 FinishMoveTool(X, Y);
                 rightButtonMove = false;
+                CommitHistory();
                 return;
             }
             if (Tool == Tool.Move)
             {
                 FinishMoveTool(X, Y);
+            }
+            else if (Tool == Tool.Rotate)
+            {
+                FinishRotateTool(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Scale)
+            {
+                FinishScaleTool(X, Y, (mods & EditorModifiers.Shift) != 0);
             }
             else if (Tool == Tool.Select)
             {
@@ -1743,6 +1771,7 @@ namespace Weland
                 bool constrainLength = (mods & EditorModifiers.Alt) != 0;
                 ConnectLine(X, Y, constrainAngle, constrainLength);
             }
+            CommitHistory();
         }
 
         public void DeleteSelected()
@@ -1805,7 +1834,7 @@ namespace Weland
                         break;
                     }
                 }
-                SetUndo();
+                SetUndo("Delete selection");
                 Level.DeletePoint(Selection.Point);
                 if (nextLine != null)
                 {
@@ -1818,25 +1847,25 @@ namespace Weland
             }
             else if (Selection.Object != -1)
             {
-                SetUndo();
+                SetUndo("Delete selection");
                 Level.DeleteObject(Selection.Object);
                 Selection.Object = -1;
             }
             else if (Selection.Line != -1)
             {
-                SetUndo();
+                SetUndo("Delete selection");
                 Level.DeleteLine(Selection.Line);
                 Selection.Line = -1;
             }
             else if (Selection.Polygon != -1)
             {
-                SetUndo();
+                SetUndo("Delete selection");
                 Level.DeletePolygon(Selection.Polygon);
                 Selection.Polygon = -1;
             }
             else if (Selection.Annotation != -1)
             {
-                SetUndo();
+                SetUndo("Delete selection");
                 Level.Annotations.RemoveAt(Selection.Annotation);
                 Selection.Annotation = -1;
             }
@@ -1846,37 +1875,6 @@ namespace Weland
             }
 
             if (changed) Changed = true;
-        }
-
-        public void SetUndo()
-        {
-            undoState = Level.Save().Clone();
-            undoSelection = new Selection();
-            undoSelection.CopyFrom(Selection);
-        }
-
-        public void ClearUndo()
-        {
-            undoState = null;
-        }
-
-        public void Undo()
-        {
-            ClearHover();
-            CancelBox();
-            CancelSelectionBox();
-            CancelCircle();
-            CancelMoveTool();
-            if (undoState != null)
-            {
-                Wadfile.DirectoryEntry redo = Level.Save().Clone();
-                Level.Load(undoState);
-                Selection temp = new Selection();
-                temp.CopyFrom(Selection);
-                Selection.CopyFrom(undoSelection);
-                undoSelection.CopyFrom(temp);
-                undoState = redo;
-            }
         }
 
         // add to the dirty rectangle

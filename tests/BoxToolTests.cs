@@ -66,11 +66,74 @@ class BoxToolTests
         DefaultSnapDistance = 8, Tool = Tool.Box
     };
 
-    static void Main()
+    static void Main(string[] args)
     {
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         int passed = 0;
         void Test(string name, Action action) { action(); Console.WriteLine("PASS " + name); ++passed; }
+        Test("MML finds and deduplicates surface collections", () => {
+            var level = new Level(); Box(level, 0, 0, 100, 100);
+            level.Polygons[0].FloorTexture = new ShapeDescriptor { Collection = 18, Bitmap = 3 };
+            level.Polygons[0].CeilingTexture = new ShapeDescriptor { Collection = 18, Bitmap = 4 };
+            level.Sides.Add(new Side {
+                Primary = new Side.TextureDefinition { Texture = new ShapeDescriptor { Collection = 19 } },
+                Secondary = new Side.TextureDefinition { Texture = ShapeDescriptor.Empty },
+                Transparent = new Side.TextureDefinition { Texture = new ShapeDescriptor { Collection = 20 } }
+            });
+            Check(LevelMml.TextureCollections(level).SequenceEqual(new[] {18, 19, 20}), "Missing or duplicate collection");
+            var mml = LevelMml.ForLevel(level);
+            Check(mml.Collections.Take(3).All(c => c == -2), "Scenario base slots overwritten");
+            Check(mml.Collections.Skip(3).SequenceEqual(new[] {18,19,20,-2}), "Wrong suggested slots");
+            Check(mml.Build().Descendants("texture_env").Count() == 3, "Unchanged slots emitted");
+        });
+        Test("MML supports all slots and explicit clearing", () => {
+            var options = new LevelMml { Environment = 4, IncludeCollections = true,
+                Collections = new[] {17,18,19,20,21,22,-1} };
+            var entries = options.Build().Descendants("texture_env").ToArray();
+            Check(entries.Length == 7 && (int)entries[6].Attribute("coll") == -1, "Wrong slot count or clear value");
+            Check(entries.All(e => (int)e.Attribute("index") == 4), "Wrong environment");
+            Check(!options.Build().Descendants("texture_loading").Single().Attributes("landscapes").Any(), "Landscape loading changed");
+        });
+        Test("MML fog uses engine attributes and invariant numbers", () => {
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            try {
+                System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("sv-SE");
+                var options = new LevelMml();
+                options.Above = new MmlFog { Include = true, Enabled = true, Depth = 12.5, Red = .25, Green = .5, Blue = .75 };
+                options.Below = new MmlFog { Include = true, Enabled = false, Landscapes = false, Depth = 3.25 };
+                var document = System.Xml.Linq.XDocument.Parse(options.Build().ToString());
+                var fog = document.Descendants("fog").ToArray();
+                Check(fog.Length == 2 && (int)fog[1].Attribute("type") == 1, "Wrong fog types");
+                Check((string)fog[0].Attribute("depth") == "12.5", "Localized depth breaks engine parser");
+                Check((string)fog[0].Element("color").Attribute("red") == "0.25", "Wrong color attribute or format");
+                Check(!(bool)fog[1].Attribute("on") && !(bool)fog[1].Attribute("landscapes"), "Explicit fog disable lost");
+                Check(!document.Descendants("texture_loading").Any(), "Fog-only export changed collections");
+            } finally { System.Globalization.CultureInfo.CurrentCulture = culture; }
+        });
+        Test("MML rejects invalid or empty settings", () => {
+            void RejectMml(LevelMml mml) {
+                bool rejected = false;
+                try { mml.Build(); } catch (ArgumentException) { rejected = true; }
+                Check(rejected, "Invalid MML settings accepted");
+            }
+            RejectMml(new LevelMml());
+            RejectMml(new LevelMml { IncludeCollections = true });
+            RejectMml(new LevelMml { IncludeCollections = true, Collections = new[] {17} });
+            RejectMml(new LevelMml { IncludeCollections = true, Environment = 5 });
+            RejectMml(new LevelMml { IncludeCollections = true, Collections = new[] {32,-2,-2,-2,-2,-2,-2} });
+            RejectMml(new LevelMml { Above = new MmlFog { Include = true, Depth = double.NaN } });
+            RejectMml(new LevelMml { Above = new MmlFog { Include = true, Red = -0.1 } });
+        });
+        Test("MML suggestions never overflow spare slots", () => {
+            var level = new Level(); Box(level,0,0,100,100);
+            for (int i = 18; i < 23; ++i) level.Sides.Add(new Side {
+                Primary = new Side.TextureDefinition { Texture = new ShapeDescriptor { Collection = (byte)i } },
+                Secondary = new Side.TextureDefinition { Texture = ShapeDescriptor.Empty },
+                Transparent = new Side.TextureDefinition { Texture = ShapeDescriptor.Empty }
+            });
+            var options = LevelMml.ForLevel(level);
+            Check(!options.IncludeCollections && options.Collections.All(c => c == -2), "Partial suggestion silently omitted needed collections");
+        });
         Test("all drag directions", () => {
             foreach (var pair in new[] { new[] {0,0,100,100}, new[] {100,100,0,0}, new[] {100,0,0,100}, new[] {0,100,100,0} }) {
                 var level = new Level(); Box(level, pair[0],pair[1],pair[2],pair[3]);
@@ -148,7 +211,7 @@ class BoxToolTests
             string after = CanonicalSnapshot(level); editor.Undo();
             Check(level.Polygons.Count == 1 && level.Endpoints.Count == 4 && level.Lines.Count == 4, "Undo failed");
             Validate(level);
-            editor.Undo(); Check(CanonicalSnapshot(level) == after, "Redo failed");
+            editor.Redo(); Check(CanonicalSnapshot(level) == after, "Redo failed");
         });
         Test("grid and derived-corner snapping", () => {
             var level = new Level(); level.NewPoint(200,0);
@@ -175,7 +238,7 @@ class BoxToolTests
             Validate(level); Check(level.Polygons[0].VertexCount == 6, "Missing wall splits");
             string after = CanonicalSnapshot(level); editor.Undo(); Validate(level);
             Check(level.Polygons.Count == 1 && level.Polygons[0].VertexCount == 4 && level.Lines.Count == 4, "Undo left split geometry behind");
-            editor.Undo(); Validate(level); Check(CanonicalSnapshot(level) == after, "Split redo failed");
+            editor.Redo(); Validate(level); Check(CanonicalSnapshot(level) == after, "Split redo failed");
         });
         Test("textured wall split preserves remaining sides", () => {
             var level = new Level(); Box(level,0,0,100,100);
@@ -186,6 +249,54 @@ class BoxToolTests
             Box(level,100,25,200,75);
             Check(level.Sides.Count == 3, "Wall sides lost during splitting");
             var loaded = new Level(); loaded.Load(level.Save().Clone()); Validate(loaded);
+        });
+        Test("textured outer wall expansion keeps side IDs and adjacency on save and undo", () => {
+            foreach (bool partial in new[]{false,true})
+            foreach (var bounds in new[]{new[]{1000,0,2000,1000},new[]{-1000,0,0,1000},new[]{0,-1000,1000,0},new[]{0,1000,1000,2000}}) {
+                var level=new Level();Box(level,0,0,1000,1000);level.Pave();
+                var editor=Editor(level);var b=(int[])bounds.Clone();
+                if(partial) {if(b[0]==0 && b[2]==1000){b[0]=250;b[2]=750;}else{b[1]=250;b[3]=750;}}
+                editor.StartBox((short)b[0],(short)b[1]);editor.FinishBox((short)b[2],(short)b[3]);
+                void CheckReferences(Level map) {
+                    foreach(var line in map.Lines.Where(l=>l.ClockwisePolygonOwner>=0 && l.CounterclockwisePolygonOwner>=0)) {
+                        foreach(short owner in new[]{line.ClockwisePolygonOwner,line.CounterclockwisePolygonOwner}) {
+                            var polygon=map.Polygons[owner];int edge=Array.IndexOf(polygon.LineIndexes,(short)map.Lines.IndexOf(line),0,polygon.VertexCount);
+                            bool cw=line.ClockwisePolygonOwner==owner;short side=cw?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+                            Check(polygon.AdjacentPolygonIndexes[edge]==(cw?line.CounterclockwisePolygonOwner:line.ClockwisePolygonOwner),"Shared edge still has -1 neighbor");
+                            Check(polygon.SideIndexes[edge]==side,"Polygon side ID differs from textured line side");
+                            if(owner==0) Check(side>=0 && !map.Sides[side].Primary.Texture.IsEmpty() && map.Sides[side].PolygonIndex==owner,"Existing wall texture or owner lost");
+                        }
+                    }
+                }
+                CheckReferences(level);var loaded=new Level();loaded.Load(level.Save().Clone());CheckReferences(loaded);
+                editor.Undo();Check(level.Polygons.Count==1,"Expansion undo failed");editor.Redo();CheckReferences(level);Validate(level);
+            }
+        });
+        Test("Pave repairs stale sides removes old outer walls and fills missing surfaces", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.Pave();
+            int wall=level.Lines.FindIndex(l=>l.EndpointIndexes.All(i=>level.Endpoints[i].X==1000));
+            var line=level.Lines[wall];short oldSide=line.ClockwisePolygonSideIndex>=0?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+            level.Sides[oldSide].Primary.Texture=(ShapeDescriptor)123;Box(level,1000,0,2000,1000);
+            foreach(var side in level.Sides){side.PolygonIndex=-1;side.LineIndex=-1;}
+            level.Polygons[1].FloorTexture=ShapeDescriptor.Empty;level.Polygons[1].CeilingTexture=ShapeDescriptor.Empty;
+            var editor=Editor(level);editor.SetUndo("Clean up wall surfaces");level.Pave();
+            Check(line.ClockwisePolygonSideIndex==-1 && line.CounterclockwisePolygonSideIndex==-1,"Old textured outer wall survived as an invisible surface");
+            Check(level.Sides.Count==6 && level.Sides.All(s=>s.LineIndex>=0 && s.PolygonIndex>=0 && !s.Primary.Texture.IsEmpty()),"Pave did not repair and texture exterior sides");
+            Check(!level.Polygons[1].FloorTexture.IsEmpty() && !level.Polygons[1].CeilingTexture.IsEmpty(),"Pave skipped floor or ceiling");
+            string clean=CanonicalSnapshot(level);level.Pave();Check(CanonicalSnapshot(level)==clean,"Cleanup is not idempotent");
+            editor.Undo();Check(level.Sides.Any(s=>s.Primary.Texture.Equals((ShapeDescriptor)123)),"Cleanup undo lost old wall texture");
+            editor.Redo();Check(CanonicalSnapshot(level)==clean,"Cleanup redo failed");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Check(loaded.Sides.Count==6,"Saved cleanup failed");Validate(loaded);
+        });
+        Test("Pave textures height steps and preserves transparent portal surfaces", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            int wall=level.Lines.FindIndex(l=>l.ClockwisePolygonOwner>=0 && l.CounterclockwisePolygonOwner>=0);
+            short transparent=level.NewSide(0,(short)wall);level.Sides[transparent].Transparent.Texture=(ShapeDescriptor)123;
+            level.Pave();Check(level.Sides.Any(s=>s.Transparent.Texture.Equals((ShapeDescriptor)123)),"Cleanup erased transparent wall");
+            level.Polygons[1].FloorHeight=100;level.Polygons[1].CeilingHeight-=100;level.Pave();
+            var line=level.Lines[wall];short step=line.ClockwisePolygonOwner==0?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+            Check(step>=0 && level.Sides[step].Type==SideType.Split && !level.Sides[step].Primary.Texture.IsEmpty() && !level.Sides[step].Secondary.Texture.IsEmpty(),"Pave skipped upper or lower height step");
+            Check(level.Sides[step].Transparent.Texture.Equals((ShapeDescriptor)123),"Pave replaced existing transparent texture");
         });
         Test("large coordinate ranges and narrow boxes", () => {
             var level = new Level(); Box(level,-30000,-30000,30000,30000);
@@ -230,7 +341,7 @@ class BoxToolTests
             editor.Motion(25,35,EditorModifiers.None); editor.ButtonRelease(25,35,EditorModifiers.None);
             Check(level.Endpoints.Contains(P(25,35)) && level.Endpoints.Contains(P(125,135)), "Group moved unevenly or more than once");
             editor.Undo(); Check(CanonicalSnapshot(level) == before && editor.Selection.Points.Count == 4, "Group undo lost geometry or selection");
-            editor.Undo(); Check(level.Endpoints.Contains(P(25,35)), "Group redo failed");
+            editor.Redo(); Check(level.Endpoints.Contains(P(25,35)), "Group redo failed");
         });
         Test("group nudge and line-only dragging", () => {
             var level = new Level(); Box(level,0,0,100,100);
@@ -320,7 +431,7 @@ class BoxToolTests
             Check(level.Polygons.Count==1,"Preview modified map");
             editor.FinishBox(700,800);Check(editor.Selection.Polygon==0,"Wrong inset selected");
             string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Inset undo failed");
-            editor.Undo();Check(CanonicalSnapshot(level)==after,"Inset redo failed");Validate(level);
+            editor.Redo();Check(CanonicalSnapshot(level)==after,"Inset redo failed");Validate(level);
         });
         Test("inset limits and existing internal geometry reject atomically", () => {
             var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,100,1200,200);Box(level,1000,400,1200,500);
@@ -364,12 +475,12 @@ class BoxToolTests
             editor.StartCircle(0,0);editor.FinishCircle(1000,1000,false);Validate(level);
             Check(level.Endpoints.Count==4 && level.Endpoints.Contains(P(503,0)),"Circle did not reuse snapped endpoint");
             string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Circle undo failed");
-            editor.Undo();Check(CanonicalSnapshot(level)==after,"Circle redo failed");
+            editor.Redo();Check(CanonicalSnapshot(level)==after,"Circle redo failed");
         });
         Test("circle overlap and crossing lines are rejected", () => {
             var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Circle;string before=Snapshot(level);
-            editor.StartCircle(200,200);editor.FinishCircle(800,800,false);
-            Check(Snapshot(level)==before && editor.CircleMessage!=null,"Inset circle unexpectedly accepted");
+            editor.StartCircle(800,800);editor.FinishCircle(1200,1200,false);
+            Check(Snapshot(level)==before && editor.CircleMessage!=null,"Circle crossed outer walls");
             level=new Level();level.NewLine(level.NewPoint(-100,500),level.NewPoint(1100,500));editor=Editor(level);editor.Tool=Tool.Circle;before=Snapshot(level);
             editor.StartCircle(0,0);editor.FinishCircle(1000,1000,false);
             Check(Snapshot(level)==before && editor.CircleMessage!=null,"Circle crossed existing line");
@@ -538,7 +649,7 @@ class BoxToolTests
                 Check(editor.BoxMessage==null && level.Polygons.Count>1,"Circle inset rejected: "+editor.BoxMessage);
                 Check(Area2(level)==area && editor.Selection.Polygon==0,"Circle inset area/index changed");Validate(level);
                 string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Circle inset undo failed");
-                editor.Undo();Check(CanonicalSnapshot(level)==after,"Circle inset redo failed");
+                editor.Redo();Check(CanonicalSnapshot(level)==after,"Circle inset redo failed");
             }
         });
         Test("nonrectangular inset preserves settings sides neighbors and object owners", () => {
@@ -640,7 +751,234 @@ class BoxToolTests
             Check(level.Polygons[1].VertexCount==6 && level.Sides.Count==6,"Shared wall did not retain both texture sides");
             Check(level.Objects[0].PolygonIndex==0 && level.Objects[1].PolygonIndex!=0 && level.Annotations[0].PolygonIndex!=0,"Edge inset content ownership wrong");
             Validate(level);string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Edge inset undo failed");
-            editor.Undo();Check(CanonicalSnapshot(level)==after,"Edge inset redo failed");Validate(level);
+            editor.Redo();Check(CanonicalSnapshot(level)==after,"Edge inset redo failed");Validate(level);
+        });
+        Test("circle insets 3 through 8 sides preserve area selection preview and undo", () => {
+            for(int sides=3;sides<=8;sides++) foreach(bool contact in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,4000,4000);long area=Area2(level);string before=CanonicalSnapshot(level);
+                var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=sides;
+                editor.StartCircle((short)(contact?0:1200),(short)(contact?0:1200));
+                editor.UpdateCircle((short)(contact?4000:2800),(short)(contact?4000:2800),false);
+                Check(CanonicalSnapshot(level)==before,"Circle inset preview changed map");
+                editor.FinishCircle((short)(contact?4000:2800),(short)(contact?4000:2800),false);
+                Check(editor.CircleMessage==null && level.Polygons.Count>1,"Circle inset failed: "+editor.CircleMessage);
+                Check(Area2(level)==area && editor.Selection.Polygon==0 && level.Polygons[0].VertexCount==sides,"Circle inset lost area/index/side count");Validate(level);
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Circle inset undo failed");
+                editor.Redo();Check(CanonicalSnapshot(level)==after,"Circle inset redo failed");
+            }
+        });
+        Test("circle inset in irregular polygon preserves settings and object ownership", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,1000),P(2000,0),P(4000,1000),P(3500,3500),P(1000,4000)}.ToList(),out string reason),reason);
+            long area=Area2(level);level.Polygons[0].FloorHeight=123;level.Polygons[0].FloorOrigin=P(21,42);
+            foreach(Point p in new[]{P(2000,2000),P(1250,1250),P(2000,500),P(500,2000)}) {
+                level.NewObject(p,0);level.Annotations.Add(new Annotation{X=p.X,Y=p.Y,PolygonIndex=0,Text="keep"});
+            }
+            var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=8;
+            editor.StartCircle(1200,1200);editor.FinishCircle(2800,2800,false);
+            Check(editor.CircleMessage==null && Area2(level)==area,"Irregular circle inset failed: "+editor.CircleMessage);
+            Check(level.Objects[0].PolygonIndex==0 && level.Objects[1].PolygonIndex!=0,"Bounding box used instead of circle for ownership");
+            foreach(MapObject obj in level.Objects)Check(obj.PolygonIndex==level.GetEnclosingPolygon(P(obj.X,obj.Y)),"Circle object ownership wrong");
+            foreach(Annotation note in level.Annotations)Check(note.PolygonIndex==level.GetEnclosingPolygon(P(note.X,note.Y)),"Circle note ownership wrong");
+            foreach(Polygon polygon in level.Polygons)Check(polygon.FloorHeight==123 && polygon.FloorOrigin.Equals(P(21,42)),"Circle inset settings lost");
+            Check(level.Polygons.Skip(1).Any(p=>p.VertexCount>3),"Circle regions not merged");Validate(level);
+        });
+        Test("circle inset along shared wall retains both wall textures and neighbor", () => {
+            var level=new Level();Box(level,0,0,4000,4000);Box(level,4000,0,8000,4000);
+            var neighbor=level.Polygons[1];neighbor.Type=PolygonType.Teleporter;neighbor.Permutation=0;
+            int wall=level.Lines.FindIndex(l=>l.ClockwisePolygonOwner==0 && l.CounterclockwisePolygonOwner==1);
+            var inside=new Side{LineIndex=(short)wall,PolygonIndex=0};inside.Primary.Texture=(ShapeDescriptor)1;
+            var outside=new Side{LineIndex=(short)wall,PolygonIndex=1};outside.Primary.Texture=(ShapeDescriptor)2;
+            level.Sides.Add(inside);level.Sides.Add(outside);level.Lines[wall].ClockwisePolygonSideIndex=0;level.Lines[wall].CounterclockwisePolygonSideIndex=1;
+            var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=4;editor.StartCircle(2000,1000);editor.FinishCircle(4000,3000,false);
+            Check(editor.CircleMessage==null && level.Polygons[1]==neighbor && neighbor.Permutation==0,"Circle shared-wall inset failed: "+editor.CircleMessage);
+            Check(neighbor.VertexCount==5 && level.Sides.Count==4,"Circle shared wall textures or splits lost");Validate(level);
+        });
+        Test("circle inset failure leaves map and undo unchanged", () => {
+            var level=new Level();var editor=Editor(level);editor.StartBox(0,0);editor.FinishBox(4000,4000);
+            editor.Tool=Tool.Circle;level.Polygons[0].Type=PolygonType.Platform;string before=Snapshot(level);
+            editor.StartCircle(1200,1200);editor.FinishCircle(2800,2800,false);
+            Check(Snapshot(level)==before && editor.CircleMessage!=null,"Special circle container accepted");
+            editor.Undo();Check(level.Polygons.Count==0,"Rejected inset replaced undo");
+            level=new Level();Box(level,0,0,4000,4000);level.NewLine(level.NewPoint(500,500),level.NewPoint(700,600));editor=Editor(level);editor.Tool=Tool.Circle;before=Snapshot(level);
+            editor.StartCircle(1200,1200);editor.FinishCircle(2800,2800,false);Check(Snapshot(level)==before && editor.CircleMessage!=null,"Inset over stray geometry accepted");
+        });
+        Test("circles and boxes can be nested repeatedly inside circle polygons", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=8;
+            editor.StartCircle(0,0);editor.FinishCircle(6000,5000,false);long area=Area2(level);
+            editor.StartCircle(1800,1400);editor.FinishCircle(4200,3600,false);
+            Check(editor.CircleMessage==null && editor.Selection.Polygon==0 && Area2(level)==area,"Circle inside ellipse failed: "+editor.CircleMessage);Validate(level);
+            editor.CircleSides=5;editor.StartCircle(2600,2100);editor.FinishCircle(3400,2900,true);
+            Check(editor.CircleMessage==null && editor.Selection.Polygon==0 && Area2(level)==area,"Repeated circle inset failed: "+editor.CircleMessage);Validate(level);
+            Box(level,2900,2400,3100,2600);Check(Area2(level)==area && level.LastCreatedBoxPolygonIndex==0,"Box inside nested circle failed");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+        });
+        Test("multiple history steps undo redo and jump restore geometry and selections", () => {
+            var level=new Level();var editor=Editor(level);var states=new System.Collections.Generic.List<string>{CanonicalSnapshot(level)};
+            for(int i=0;i<3;i++) {editor.StartBox((short)(i*200),0);editor.FinishBox((short)(i*200+100),100);states.Add(CanonicalSnapshot(level));}
+            Check(editor.HistoryLabels.Count==4 && editor.HistoryPosition==3 && editor.HistoryLabels[3]=="Draw box","History rows missing");
+            for(int i=2;i>=0;i--) {editor.Undo();Check(CanonicalSnapshot(level)==states[i],"Multi-step undo wrong");}
+            Check(!editor.CanUndo && editor.CanRedo,"Undo boundary wrong");editor.Undo();Check(CanonicalSnapshot(level)==states[0],"Empty undo changed map");
+            for(int i=1;i<=3;i++) {editor.Redo();Check(CanonicalSnapshot(level)==states[i],"Multi-step redo wrong");}
+            Check(editor.Selection.Polygon==2 && !editor.CanRedo,"Redo lost selection");
+            editor.GoToHistory(1);Check(CanonicalSnapshot(level)==states[1] && editor.Selection.Polygon==0,"Backward history jump wrong");
+            editor.GoToHistory(3);Check(CanonicalSnapshot(level)==states[3] && editor.Selection.Polygon==2,"Forward history jump wrong");
+            editor.GoToHistory(99);Check(editor.HistoryPosition==3,"Invalid history index accepted");
+        });
+        Test("new edits discard redo while failed and empty edits preserve it", () => {
+            var level=new Level();var editor=Editor(level);editor.StartBox(0,0);editor.FinishBox(1000,1000);
+            editor.StartBox(1000,0);editor.FinishBox(2000,1000);editor.Undo();Check(editor.CanRedo,"Missing redo");
+            editor.StartBox(-100,-100);editor.FinishBox(1100,1100);Check(editor.CanRedo && editor.HistoryLabels.Count==3,"Failed box replaced redo");
+            editor.Tool=Tool.Move;editor.Selection.Clear();editor.ButtonPress(0,0,EditorModifiers.None);editor.ButtonRelease(100,100,EditorModifiers.None);
+            Check(editor.CanRedo && editor.HistoryLabels.Count==3,"Empty move replaced redo");
+            editor.SetUndo("No-op");editor.CommitHistory();Check(editor.CanRedo,"No-op snapshot replaced redo");
+            editor.Tool=Tool.Box;editor.StartBox(0,1000);editor.FinishBox(1000,2000);
+            Check(!editor.CanRedo && editor.HistoryLabels.Count==3,"New edit failed to truncate future");Validate(level);
+        });
+        Test("a long drag is one history action and restores group selection", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Select;
+            editor.Selection.Polygons.Add(0);editor.ButtonPress(500,500,EditorModifiers.RightClick);
+            for(short i=1;i<=20;i++) {editor.Motion((short)(500+i*10),(short)(500+i*5),EditorModifiers.RightClick);Check(editor.HistoryLabels.Count==1,"Drag committed partial action");}
+            editor.ButtonRelease(700,600,EditorModifiers.RightClick);Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Move selection","Drag not one step");
+            editor.Selection.Polygons.Clear();editor.Undo();Check(level.Endpoints.Contains(P(0,0)) && editor.Selection.Polygons.Contains(0),"History group selection not restored");
+            editor.Redo();Check(level.Endpoints.Contains(P(200,100)) && editor.Selection.Polygons.Contains(0),"Drag redo wrong");
+        });
+        Test("history retains 100 actions and clearing starts a new map history", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Point=0;
+            for(int i=0;i<105;i++)editor.NudgeSelected(1,0);
+            Check(editor.HistoryLabels.Count==101 && editor.HistoryPosition==100 && editor.HistoryLabels[0]=="Earlier state","History limit wrong");
+            for(int i=0;i<100;i++)editor.Undo();Check(level.Endpoints[0].X==5 && !editor.CanUndo,"Retained initial state wrong");
+            editor.ClearUndo();Check(!editor.CanUndo && !editor.CanRedo && editor.HistoryLabels.Count==1,"Clear history failed");
+        });
+        Test("failed fill and canceled line do not add history entries", () => {
+            var level=new Level();var editor=Editor(level);editor.StartBox(0,0);editor.FinishBox(1000,1000);editor.CommitHistory();
+            editor.Tool=Tool.Fill;editor.ButtonPress(500,500,EditorModifiers.None);editor.ButtonRelease(500,500,EditorModifiers.None);
+            Check(editor.HistoryLabels.Count==2,"Failed fill added action");
+            editor.Tool=Tool.Line;editor.ButtonPress(2000,2000,EditorModifiers.None);editor.Undo();
+            Check(level.Polygons.Count==0 && level.Endpoints.Count==0 && editor.HistoryLabels.Count==2,"Canceled temporary line was recorded");
+        });
+        Test("Rotate keeps polygon center carries contents and records one undo step", () => {
+            var level=new Level();Box(level,0,0,1000,500);level.NewObject(P(750,250),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=0;
+            level.Annotations.Add(new Annotation{X=750,Y=250,PolygonIndex=0,Text="rotate"});
+            var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Rotate;
+            Check(editor.Selection.Polygon==0,"Choosing Rotate cleared selection");string before=CanonicalSnapshot(level);
+            editor.ButtonPress(1000,250,EditorModifiers.None);editor.Motion(500,750,EditorModifiers.None);
+            Check(editor.RotatingSelection && editor.RotationCenterX==500 && editor.RotationCenterY==250,"Wrong rotation pivot");
+            Check(editor.HistoryLabels.Count==1,"Rotation drag committed partial history");editor.ButtonRelease(500,750,EditorModifiers.None);
+            Check(!editor.RotatingSelection && level.Endpoints.Contains(P(750,-250)) && level.Endpoints.Contains(P(250,750)),"Polygon rotation wrong");
+            Check(level.Objects[0].X==500 && level.Objects[0].Y==500 && Math.Abs(level.Objects[0].Facing-90)<1,"Object position or facing not rotated");
+            Check(level.Annotations[0].X==500 && level.Annotations[0].Y==500 && level.Objects[0].PolygonIndex==0,"Polygon contents lost");
+            Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Rotate selection","Rotation not one history action");
+            string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before && editor.Selection.Polygon==0,"Rotation undo failed");
+            editor.Redo();Check(CanonicalSnapshot(level)==after,"Rotation redo failed");Validate(level);
+        });
+        Test("Rotate polygon groups share one pivot and do not accumulate rounding", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var original=level.Endpoints.ToArray();
+            var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});editor.Tool=Tool.Rotate;
+            editor.ButtonPress(2000,500,EditorModifiers.None);
+            for(int degrees=1;degrees<=179;degrees++)editor.Motion((short)Math.Round(1000+1000*Math.Cos(degrees*Math.PI/180)),(short)Math.Round(500+1000*Math.Sin(degrees*Math.PI/180)),EditorModifiers.None);
+            editor.ButtonRelease(0,500,EditorModifiers.None);
+            for(int i=0;i<original.Length;i++)Check(level.Endpoints[i].Equals(P(2000-original[i].X,1000-original[i].Y)),"Shared endpoint rotated twice or accumulated rounding");
+            Validate(level);Check(editor.HistoryLabels.Count==2,"Long group rotation created extra history");
+        });
+        Test("Rotate line and mixed vertices with Shift snap and no-op gestures", () => {
+            var level=new Level();short a=level.NewPoint(0,0),b=level.NewPoint(1000,0);short line=level.NewLine(a,b);
+            var editor=Editor(level);editor.Selection.Line=line;editor.Tool=Tool.Rotate;editor.ButtonPress(1000,0,EditorModifiers.None);
+            editor.ButtonRelease(501,500,EditorModifiers.Shift);Check(level.Endpoints[a].Equals(P(500,-500)) && level.Endpoints[b].Equals(P(500,500)),"Shift line rotation wrong");
+            editor.Selection.Clear();string before=CanonicalSnapshot(level);int count=editor.HistoryLabels.Count;
+            editor.ButtonPress(0,0,EditorModifiers.None);editor.ButtonRelease(100,100,EditorModifiers.None);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==count,"Empty rotation changed map");
+            editor.Selection.Point=a;editor.ButtonPress(0,0,EditorModifiers.None);editor.ButtonRelease(100,100,EditorModifiers.None);Check(CanonicalSnapshot(level)==before,"Single vertex rotated away from itself");
+            editor.Selection.Clear();editor.Selection.Points.UnionWith(new[]{a,b});editor.ButtonPress(1000,0,EditorModifiers.None);editor.ButtonRelease(0,0,EditorModifiers.None);
+            Check(level.Endpoints[a].Equals(P(500,500)) && level.Endpoints[b].Equals(P(500,-500)),"Multiple vertices rotation wrong");
+        });
+        Test("Rotate rejects coordinate overflow and right drag still moves", () => {
+            var level=new Level();Box(level,32500,-1000,32700,1000);var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Rotate;
+            string before=CanonicalSnapshot(level);editor.ButtonPress(32700,0,EditorModifiers.None);editor.ButtonRelease(32600,1000,EditorModifiers.None);
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Overflow rotation distorted or changed geometry");
+            editor.ButtonPress(32600,0,EditorModifiers.RightClick);editor.ButtonRelease(32500,0,EditorModifiers.RightClick);
+            Check(level.Endpoints.Contains(P(32400,-1000)) && editor.HistoryLabels[1]=="Move selection","Rotate replaced right-drag Move");
+        });
+        Test("Scale polygon around center carries contents and undoes in one step", () => {
+            var level=new Level();Box(level,0,0,1000,500);level.NewObject(P(750,250),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=90;
+            level.Annotations.Add(new Annotation{X=750,Y=250,PolygonIndex=0,Text="scale"});var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
+            Check(editor.Selection.Polygon==0 && editor.ShowRotationCenter(),"Scale lost selection or pivot");string before=CanonicalSnapshot(level);
+            editor.ButtonPress(1000,250,EditorModifiers.None);editor.Motion(1500,250,EditorModifiers.None);
+            Check(editor.ScalingSelection && !editor.RotatingSelection && editor.HistoryLabels.Count==1,"Scale drag state wrong");editor.ButtonRelease(1500,250,EditorModifiers.None);
+            Check(level.Endpoints.Contains(P(-500,-250)) && level.Endpoints.Contains(P(1500,750)),"Scale changed center or aspect ratio");
+            Check(level.Objects[0].X==1000 && level.Objects[0].Y==250 && Math.Abs(level.Objects[0].Facing-90)<1 && level.Annotations[0].X==1000,"Scale lost contents or changed facing");
+            Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Scale selection","Scale not one undo step");string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before && editor.Selection.Polygon==0,"Scale undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Scale redo failed");Validate(level);
+        });
+        Test("Scale groups preserve shared vertices and recompute from original positions", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var original=level.Endpoints.ToArray();var editor=Editor(level);
+            editor.Selection.Polygons.UnionWith(new short[]{0,1});editor.Tool=Tool.Scale;editor.ButtonPress(2000,500,EditorModifiers.None);
+            for(short x=1990;x>=1510;x-=10)editor.Motion(x,500,EditorModifiers.None);editor.ButtonRelease(1500,500,EditorModifiers.None);
+            for(int i=0;i<original.Length;i++)Check(level.Endpoints[i].Equals(P(500+original[i].X/2,250+original[i].Y/2)),"Shared endpoint scaled twice or rounding accumulated");
+            Check(editor.HistoryLabels.Count==2,"Scale group created extra history");Validate(level);
+        });
+        Test("Scale lines and selected vertices snap reject collapse and handle no selection", () => {
+            var level=new Level();short a=level.NewPoint(0,0),b=level.NewPoint(1000,0);short line=level.NewLine(a,b);var editor=Editor(level);editor.Selection.Line=line;editor.Tool=Tool.Scale;
+            editor.ButtonPress(1000,0,EditorModifiers.None);editor.ButtonRelease(1135,0,EditorModifiers.Shift);
+            Check(level.Endpoints[a].Equals(P(-150,0)) && level.Endpoints[b].Equals(P(1150,0)),"Scale 10 percent snapping failed");
+            editor.Selection.Clear();string before=CanonicalSnapshot(level);int count=editor.HistoryLabels.Count;
+            editor.ButtonPress(1000,0,EditorModifiers.None);editor.ButtonRelease(1500,0,EditorModifiers.None);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==count,"Empty scale changed map");
+            editor.Selection.Point=a;editor.ButtonPress(1000,0,EditorModifiers.None);editor.ButtonRelease(1500,0,EditorModifiers.None);Check(CanonicalSnapshot(level)==before,"Single vertex scaled away from center");
+            level=new Level();a=level.NewPoint(0,0);b=level.NewPoint(2,0);level.NewLine(a,b);editor=Editor(level);editor.Selection.Points.UnionWith(new[]{a,b});editor.Tool=Tool.Scale;before=CanonicalSnapshot(level);
+            editor.ButtonPress(11,0,EditorModifiers.None);editor.ButtonRelease(2,0,EditorModifiers.None);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Tiny scale collapsed vertices");
+        });
+        Test("Scale overflow is atomic undo cancels active drag and right drag moves", () => {
+            var level=new Level();Box(level,30000,0,32000,1000);var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;string before=CanonicalSnapshot(level);
+            editor.ButtonPress(32000,500,EditorModifiers.None);editor.ButtonRelease(31000,10000,EditorModifiers.None);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Overflow scale changed geometry");
+            editor.ButtonPress(32000,500,EditorModifiers.None);editor.Motion(31500,500,EditorModifiers.None);editor.Undo();Check(!editor.ScalingSelection && CanonicalSnapshot(level)==before,"Undo did not cancel scale drag");
+            editor.ButtonPress(31000,500,EditorModifiers.RightClick);editor.ButtonRelease(30900,500,EditorModifiers.RightClick);Check(level.Endpoints.Contains(P(29900,0)) && editor.HistoryLabels[1]=="Move selection","Scale replaced right-drag move");
+        });
+        Test("Pave covers existing opaque textures while cleanup preserves them", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            level.Polygons[1].FloorHeight=100;level.Polygons[1].CeilingHeight-=100;level.Pave();
+            foreach(var polygon in level.Polygons) {polygon.FloorTexture=(ShapeDescriptor)123;polygon.CeilingTexture=(ShapeDescriptor)124;polygon.FloorTransferMode=3;}
+            foreach(var side in level.Sides) {side.Primary.Texture=(ShapeDescriptor)125;side.PrimaryLightsourceIndex=2;if(side.Type==SideType.Split)side.Secondary.Texture=(ShapeDescriptor)126;}
+            level.Pave(false);Check(level.Polygons.All(p=>p.FloorTexture.Equals((ShapeDescriptor)123) && p.CeilingTexture.Equals((ShapeDescriptor)124)) && level.Sides.All(s=>s.Primary.Texture.Equals((ShapeDescriptor)125)),"Cleanup overwrote existing textures");
+            var editor=Editor(level);string before=CanonicalSnapshot(level);editor.SetUndo("Pave map");level.Pave(true);
+            foreach(var polygon in level.Polygons) Check(polygon.FloorTexture.Collection==level.Environment+17 && polygon.FloorTexture.Bitmap==6 && polygon.CeilingTexture.Bitmap==7 && polygon.FloorTransferMode==3,"Pave skipped existing floor/ceiling or reset transfer mode");
+            foreach(var side in level.Sides) Check(side.Primary.Texture.Collection==level.Environment+17 && side.Primary.Texture.Bitmap==5 && side.PrimaryLightsourceIndex==2 && (side.Type!=SideType.Split || side.Secondary.Texture.Bitmap==5),"Pave skipped existing wall or reset lighting");
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Pave undo did not restore previous textures");
+        });
+        Test("Pave builds complete descriptors without retaining an invalid old palette", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.Pave();
+            var old=new ShapeDescriptor((ushort)(7<<13 | 20<<8 | 123));
+            foreach(var side in level.Sides)side.Primary.Texture=old;
+            level.Polygons[0].FloorTexture=old;level.Polygons[0].CeilingTexture=old;
+            level.Pave(true);Check(level.Sides.All(s=>s.Primary.Texture.CLUT==0) && level.Polygons[0].FloorTexture.CLUT==0 && level.Polygons[0].CeilingTexture.CLUT==0,"Pave retained an unsupported palette");
+            var wall=new ShapeDescriptor((ushort)(19<<8 | 1));var floor=new ShapeDescriptor((ushort)(19<<8 | 2));var ceiling=new ShapeDescriptor((ushort)(19<<8 | 3));
+            level.Pave(true,wall,floor,ceiling);
+            Check(level.Sides.All(s=>s.Primary.Texture.Equals(wall)) && level.Polygons[0].FloorTexture.Equals(floor) && level.Polygons[0].CeilingTexture.Equals(ceiling),"Pave ignored available Shapes-file descriptors");
+        });
+        Test("Default Pave fills missing textures without replacing existing surfaces", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            level.Polygons[1].FloorHeight=100;level.Polygons[1].CeilingHeight-=100;level.Pave();
+            foreach(var side in level.Sides){side.Primary.Texture=(ShapeDescriptor)123;side.PrimaryLightsourceIndex=2;side.Primary.X=37;}
+            var split=level.Sides.First(s=>s.Type==SideType.Split);split.Secondary.Texture=ShapeDescriptor.Empty;
+            level.Polygons[0].FloorTexture=(ShapeDescriptor)124;level.Polygons[0].CeilingTexture=ShapeDescriptor.Empty;
+            level.Pave();
+            Check(level.Sides.All(s=>s.Primary.Texture.Equals((ShapeDescriptor)123) && s.PrimaryLightsourceIndex==2 && s.Primary.X==37),"Pave replaced textured walls or settings");
+            Check(level.Polygons[0].FloorTexture.Equals((ShapeDescriptor)124),"Pave replaced textured floor");
+            Check(!split.Secondary.Texture.IsEmpty() && !level.Polygons[0].CeilingTexture.IsEmpty(),"Pave skipped missing secondary wall or ceiling");
+        });
+        Test("Pave defaults skip uniform-color placeholder images", () => {
+            var image=new Image(2,2);for(int i=2;i<image.Data.Length;i+=3)image.Data[i]=255;
+            Check(!PaveTextureSelection.HasTextureDetail(image),"Solid blue placeholder accepted");image.Data[3]=40;
+            Check(PaveTextureSelection.HasTextureDetail(image),"Detailed texture rejected");
+        });
+        if(args.Length==2) Test("ApX hex map paving replaces blue placeholders with detailed textures", () => {
+            var shapes=new ShapesFile();using(var reader=new BinaryReaderBE(System.IO.File.OpenRead(args[1])))shapes.Load(reader);
+            var map=new MapFile();map.Load(args[0]);var level=new Level();level.Load(map.Directory[0]);
+            Check(!PaveTextureSelection.HasTextureDetail(shapes.GetShape(new ShapeDescriptor((ushort)(17<<8|5)))),"ApX reproduction no longer contains stock blue placeholder");
+            Check(PaveTextureSelection.TryChoose(shapes,level.Environment+17,out ShapeDescriptor wall,out ShapeDescriptor floor,out ShapeDescriptor ceiling),"No ApX defaults selected");
+            Check(wall.Collection==17 && wall.Bitmap==0 && floor.Bitmap==1 && ceiling.Bitmap==2,"Unexpected ApX defaults");
+            var endpoints=level.Endpoints.ToArray();int objects=level.Objects.Count,polygons=level.Polygons.Count;
+            level.Pave(true,wall,floor,ceiling);var loaded=new Level();loaded.Load(level.Save().Clone());
+            Check(loaded.Endpoints.SequenceEqual(endpoints) && loaded.Objects.Count==objects && loaded.Polygons.Count==polygons,"Paving changed map geometry or objects");
+            foreach(var texture in loaded.Polygons.SelectMany(p=>new[]{p.FloorTexture,p.CeilingTexture}).Concat(loaded.Sides.Select(s=>s.Primary.Texture)).Where(t=>!t.IsEmpty()))
+                Check(PaveTextureSelection.HasTextureDetail(shapes.GetShape(texture)),"Paved surface still has a blank placeholder");
         });
         Console.WriteLine(passed + " test groups passed.");
     }

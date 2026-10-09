@@ -61,6 +61,12 @@
     <EmbeddedResource Include="images\move-selection.svg">
       <LogicalName>move-selection.svg</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="images\rotate.svg">
+      <LogicalName>rotate.svg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="images\scale.svg">
+      <LogicalName>scale.svg</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="images\circle.svg">
       <LogicalName>circle.svg</LogicalName>
     </EmbeddedResource>

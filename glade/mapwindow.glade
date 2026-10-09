@@ -968,6 +968,16 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkMenuItem" id="gtk-redo">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Redo</property>
+                        <signal name="activate" handler="OnRedo" swapped="no"/>
+                        <accelerator key="z" signal="activate" modifiers="GDK_CONTROL_MASK | GDK_SHIFT_MASK"/>
+                        <accelerator key="y" signal="activate" modifiers="GDK_CONTROL_MASK"/>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkSeparatorMenuItem" id="separatormenuitem2">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
@@ -1353,6 +1363,23 @@
                         <property name="label" translatable="yes">Pave Level</property>
                         <property name="use-underline">True</property>
                         <signal name="activate" handler="OnPave" swapped="no"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkMenuItem" id="cleanup-wall-surfaces">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Clean Up Wall Surfaces</property>
+                        <property name="tooltip-text" translatable="yes">Remove obsolete wall textures, repair side IDs, and texture missing surfaces.</property>
+                        <signal name="activate" handler="OnCleanupWallSurfaces" swapped="no"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkMenuItem" id="export-level-mml">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Export Level MML…</property>
+                        <signal name="activate" handler="OnExportMml" swapped="no"/>
                       </object>
                     </child>
                     <child>
@@ -2100,6 +2127,34 @@
                     <property name="can-focus">False</property>
                     <property name="tooltip-text" translatable="yes">Move Selection (M)</property>
                     <property name="label" translatable="yes">Move</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkRadioToolButton" id="rotateButton">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Rotate Selection (R). Drag around its center; Shift snaps to 15 degrees.</property>
+                    <property name="label" translatable="yes">Rotate</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkRadioToolButton" id="scaleButton">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Scale Selection (S). Drag toward or away from its center; Shift snaps to 10 percent increments.</property>
+                    <property name="label" translatable="yes">Scale</property>
                     <property name="group">selectButton</property>
                     <signal name="toggled" handler="OnChooseTool" swapped="no"/>
                   </object>
