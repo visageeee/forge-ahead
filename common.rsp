@@ -23,6 +23,8 @@ RotateTool.cs
 ScaleTool.cs
 LevelMml.cs
 gtk-sharp/MmlExport.cs
+level/EmbeddedLua.cs
+gtk-sharp/LuaScriptsDialog.cs
 gtk-sharp/CircleOptions.cs
 gtk-sharp/HistoryPanel.cs
 mac/IgeMacMenu.cs

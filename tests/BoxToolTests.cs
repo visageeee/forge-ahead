@@ -71,6 +71,68 @@ class BoxToolTests
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         int passed = 0;
         void Test(string name, Action action) { action(); Console.WriteLine("PASS " + name); ++passed; }
+        Test("embedded Lua engine layout and UTF8 round trip", () => {
+            var scripts = new[] {
+                new EmbeddedLuaScript { Name = "Första", Flags = 0x12345678, Text = "-- snö 雪\nTriggers = {}\n" },
+                new EmbeddedLuaScript { Name = "Second", Text = "print('hello')\r\n" }
+            };
+            byte[] bytes = EmbeddedLua.Write(scripts);
+            Check(bytes[0] == 0 && bytes[1] == 2, "Wrong big-endian script count");
+            Check(bytes.Skip(2).Take(4).SequenceEqual(new byte[] {0x12,0x34,0x56,0x78}), "Flags not big endian");
+            int length = scripts[0].Source.Length;
+            Check(bytes[72] == 0 && bytes[73] == 0 && bytes[74] == 0 && bytes[75] == length, "Wrong source length offset");
+            Check(bytes.Skip(76).Take(length).SequenceEqual(scripts[0].Source), "Wrong engine source offset");
+            var read = EmbeddedLua.Read(bytes);
+            Check(read.Count == 2 && read[0].Name == "Första" && read[1].Text == scripts[1].Text, "Lua contents changed");
+            Check(EmbeddedLua.Write(read).SequenceEqual(bytes), "Untouched script headers or source changed");
+        });
+        Test("embedded Lua survives disk save load and undo redo", () => {
+            var level = new Level(); Box(level,0,0,100,100); var editor = Editor(level);
+            var scripts = new[] {new EmbeddedLuaScript { Name = "test.lua", Text = "Triggers = {}\n" }};
+            editor.SetUndo("Edit level Lua scripts"); level.Chunks[EmbeddedLua.Tag] = EmbeddedLua.Write(scripts);
+            editor.Changed = true; editor.CommitHistory(true);
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid()+".sceA");
+            try {
+                var map = new MapFile(); map.Directory[0] = level.Save(); map.Save(path);
+                var loaded = new MapFile(); loaded.Load(path); var reopened = new Level(); reopened.Load(loaded.Directory[0]);
+                Check(reopened.Chunks[EmbeddedLua.Tag].SequenceEqual(level.Chunks[EmbeddedLua.Tag]), "Map save lost embedded Lua");
+            } finally { System.IO.File.Delete(path); }
+            editor.Undo(); Check(!level.Chunks.ContainsKey(EmbeddedLua.Tag), "Lua undo failed");
+            editor.Redo(); Check(EmbeddedLua.Read(level.Chunks[EmbeddedLua.Tag])[0].Name == "test.lua", "Lua redo failed");
+            editor.SetUndo("Remove level Lua scripts"); level.Chunks.Remove(EmbeddedLua.Tag); editor.CommitHistory(true);
+            editor.Undo(); Check(level.Chunks.ContainsKey(EmbeddedLua.Tag), "Script removal cannot undo");
+        });
+        Test("embedded Lua protected during visual mode", () => {
+            var level = new Level(); Box(level,0,0,100,100);
+            byte[] bytes = EmbeddedLua.Write(new[] { new EmbeddedLuaScript { Name = "kill-floor.lua", Text = "Triggers = {}\n" } });
+            level.Chunks[EmbeddedLua.Tag] = bytes;
+            var original = level.Save().Clone();
+            var editing = EmbeddedLua.ForVisualMode(original, "Triggers = {}\n");
+            Check(EmbeddedLua.Read(editing.Chunks[EmbeddedLua.Tag]).Single().Name == "Weland Visual Mode Locator", "Gameplay script runs in visual mode");
+            Check(original.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes) && level.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes), "Preparing visual mode changed map Lua");
+            EmbeddedLua.RestoreAfterVisualMode(original, editing);
+            Check(editing.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes), "Returning lost gameplay scripts");
+            editing.Chunks[EmbeddedLua.Tag][0] = 7;
+            Check(original.Chunks[EmbeddedLua.Tag][0] == 0, "Returned Lua shares mutable storage");
+            Check(!EmbeddedLua.ForVisualMode(original, null).Chunks.ContainsKey(EmbeddedLua.Tag), "No-locator visual mode kept gameplay Lua");
+            original.Chunks.Remove(EmbeddedLua.Tag); editing = EmbeddedLua.ForVisualMode(original, "Triggers = {}\n");
+            EmbeddedLua.RestoreAfterVisualMode(original, editing);
+            Check(!editing.Chunks.ContainsKey(EmbeddedLua.Tag), "Locator leaked into map without Lua");
+        });
+        Test("embedded Lua rejects truncated chunks and invalid names", () => {
+            byte[] bytes = EmbeddedLua.Write(new[] {new EmbeddedLuaScript {Name = "test", Text = "return 1"}});
+            foreach (int length in new[] {0,1,2,40,75,bytes.Length-1}) {
+                bool rejected = false;
+                try { EmbeddedLua.Read(bytes.Take(length).ToArray()); } catch (System.IO.InvalidDataException) { rejected = true; }
+                Check(rejected, "Truncated Lua accepted");
+            }
+            foreach (string name in new[] {"", new string('a',66), "a\0b"}) {
+                bool rejected = false;
+                try { _ = new EmbeddedLuaScript { Name = name }; } catch (ArgumentException) { rejected = true; }
+                Check(rejected, "Invalid script name accepted");
+            }
+            Check(EmbeddedLua.Read(null).Count == 0, "Missing Lua chunk is not empty");
+        });
         Test("MML finds and deduplicates surface collections", () => {
             var level = new Level(); Box(level, 0, 0, 100, 100);
             level.Polygons[0].FloorTexture = new ShapeDescriptor { Collection = 18, Bitmap = 3 };

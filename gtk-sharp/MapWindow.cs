@@ -2568,7 +2568,8 @@ namespace Weland
             MapFile toEditor = new MapFile();
             Level.AssurePlayerStart();
             Redraw();
-            toEditor.Directory[0] = Level.Save();
+            var originalLevel = Level.Save().Clone();
+            toEditor.Directory[0] = EmbeddedLua.ForVisualMode(originalLevel, null);
 
             var polygonIndex = Level.VisualModePolygonIndex;
             var point = Level.VisualModePoint;
@@ -2576,24 +2577,10 @@ namespace Weland
             {
                 // add a little LUAS to teleport the player
                 var script =
-                    String.Format("Triggers = {{}}\nfunction Triggers.init()\nPlayers[0]:position({0}, {1}, {2}, {3})\nend\n", point.X / 1024.0, point.Y / 1024.0, Level.Polygons[polygonIndex].FloorHeight / 1024.0, polygonIndex);
-
-                var bytes = System.Text.Encoding.ASCII.GetBytes(script);
-
-                string scriptName = "Weland Visual Mode Locator";
-                MemoryStream stream = new MemoryStream();
-                BinaryWriterBE writer = new BinaryWriterBE(stream);
-                writer.Write((short)1); // one script
-                writer.Write((uint)4); // no flags
-                writer.Write(System.Text.Encoding.ASCII.GetBytes(scriptName));
-                for (int i = 0; i < 66 - scriptName.Length; ++i)
-                {
-                    writer.Write((byte)0);
-                }
-                writer.Write((uint)bytes.Length);
-                writer.Write(bytes);
-
-                toEditor.Directory[0].Chunks[Wadfile.Chunk("LUAS")] = stream.ToArray();
+                    String.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "Triggers = {{}}\nfunction Triggers.init()\nPlayers[0]:position({0}, {1}, {2}, {3})\nend\n",
+                        point.X / 1024.0, point.Y / 1024.0, Level.Polygons[polygonIndex].FloorHeight / 1024.0, polygonIndex);
+                toEditor.Directory[0] = EmbeddedLua.ForVisualMode(originalLevel, script);
             }
 
             toEditor.Save(toEditorName);
@@ -2633,16 +2620,22 @@ namespace Weland
                     {
                         MapFile fromEditor = new MapFile();
                         fromEditor.Load(fromEditorName);
-                        fromEditor.Directory[0].Chunks.Remove(Wadfile.Chunk("LUAS"));
-                        Level = new Level();
-                        Level.Load(fromEditor.Directory[0]);
-                        if (polygonIndex != -1)
+                        EmbeddedLua.RestoreAfterVisualMode(originalLevel, fromEditor.Directory[0]);
+                        var returnedLevel = new Level();
+                        returnedLevel.Load(fromEditor.Directory[0]);
+                        Level = returnedLevel;
+                        selection.Clear();
+                        if (polygonIndex >= 0 && polygonIndex < Level.Polygons.Count)
                         {
                             Level.VisualModePolygonIndex = polygonIndex;
                             Level.VisualModePoint = point;
                         }
                         editor.ClearUndo();
                         editor.Changed = true;
+                        AdjustScrollRange();
+                        // Heights, lights and other paint values can change in
+                        // visual mode. Rebuild the active palette before drawing.
+                        ChooseTool(editor.Tool);
 
                         d.Dispose();
                     }

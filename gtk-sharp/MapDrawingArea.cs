@@ -635,6 +635,13 @@ namespace Weland
             Hover
         }
 
+        Drawer.Color PaintColor(short index)
+        {
+            // Imported maps and live edits may introduce values before the
+            // active palette has been rebuilt. Keep those polygons drawable.
+            return PaintColors.TryGetValue(index, out Drawer.Color color) ? color : polygonColor;
+        }
+
         void DrawPolygon(short polygon_index, PolygonColor color, Cairo.Context cr)
         {
             Polygon polygon = Level.Polygons[polygon_index];
@@ -645,39 +652,39 @@ namespace Weland
             }
             if (Mode == DrawMode.FloorHeight)
             {
-                drawer.FillPolygon(PaintColors[polygon.FloorHeight], points);
+                drawer.FillPolygon(PaintColor(polygon.FloorHeight), points);
             }
             else if (Mode == DrawMode.CeilingHeight)
             {
-                drawer.FillPolygon(PaintColors[polygon.CeilingHeight], points);
+                drawer.FillPolygon(PaintColor(polygon.CeilingHeight), points);
             }
             else if (Mode == DrawMode.PolygonType)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.Type], points);
+                drawer.FillPolygon(PaintColor((short)polygon.Type), points);
             }
             else if (Mode == DrawMode.FloorLight)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.FloorLight], points);
+                drawer.FillPolygon(PaintColor((short)polygon.FloorLight), points);
             }
             else if (Mode == DrawMode.CeilingLight)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.CeilingLight], points);
+                drawer.FillPolygon(PaintColor((short)polygon.CeilingLight), points);
             }
             else if (Mode == DrawMode.MediaLight)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.MediaLight], points);
+                drawer.FillPolygon(PaintColor((short)polygon.MediaLight), points);
             }
             else if (Mode == DrawMode.Media)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.MediaIndex], points);
+                drawer.FillPolygon(PaintColor((short)polygon.MediaIndex), points);
             }
             else if (Mode == DrawMode.AmbientSound)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.AmbientSound], points);
+                drawer.FillPolygon(PaintColor((short)polygon.AmbientSound), points);
             }
             else if (Mode == DrawMode.RandomSound)
             {
-                drawer.FillPolygon(PaintColors[(short)polygon.RandomSound], points);
+                drawer.FillPolygon(PaintColor((short)polygon.RandomSound), points);
             }
             else if (Mode == DrawMode.FloorTexture)
             {

@@ -163,6 +163,29 @@ Select vertices, lines or polygons, then choose Scale (S). Drag away from the ce
 Selected polygons carry their objects and annotations; object facing and polygon heights stay unchanged. Shared endpoints scale once, and each drag is one undo/redo step. Scaling that would collapse vertices, lines or polygons, or exceed map coordinate limits, is ignored. Right-drag still moves the selection.
 
 Paving uses an available wall collection from the loaded Shapes file and palette zero, rather than assuming the stock scenario's bitmap indices exist. Paving skips uniform-color placeholder bitmaps. If stock default indices are placeholders or absent, it chooses detailed bitmaps from that wall collection instead. If no wall collection is loaded, Pave, cleanup and Nuke Textures leave the map unchanged and explain how to load Shapes.
+# Embedded Lua
+
+Use **Special → Level Lua Scripts…** to add or import `.lua` files into the current
+level, edit their names/source, export copies, reorder scripts, or remove them.
+**Apply** commits one undoable edit; **Cancel** discards dialog changes. Save the
+map normally to persist the scripts. Each level has its own script list, stored
+in Aleph One's `LUAS` chunk; Atque is not needed to embed Lua this way.
+Scripts run in list order in gameplay. They share Lua globals, so coordinate
+trigger definitions when combining scripts. The editor stores source but does
+not syntax-check or run it. Import UTF-8 text Lua files, not Lua bytecode.
+
+Visual mode temporarily disables embedded gameplay Lua and uses only its own
+locator script when needed. The original Lua chunk is restored exactly on return
+and remains intact if visual mode fails. Existing names, flags and source bytes
+are preserved when not edited. MML export remains a separate feature.
+
+# Visual mode return
+
+Returning from visual mode reloads the active paint palette, clears stale
+selection references, and updates the scroll range. Newly introduced heights
+and other paint values no longer cause missing-color dictionary exceptions;
+drawing falls back to the normal polygon color if a palette entry is absent.
+
 # MML export
 
 Use **Special → Export Level MML…** to generate an Aleph One `.mml` script.
