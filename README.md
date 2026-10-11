@@ -6,17 +6,13 @@ Forge Ahead is an expanded fork of [Weland](https://github.com/treellama/weland)
 the Marathon map editor originally created by Gregory Smith. It supports map
 editing for Marathon, Aleph One, and Sprintathon, using .NET 8 and GTK 3.
 
-Previously called **Weland SE**, this fork was renamed **Forge Ahead on request**.
-The new name distinguishes the expanded fork from the original Weland project.
+This fork was renamed by request to differentiate it from the original Weland project.
 
 ## Development with AI
 
-The enhancements in this fork are developed by **visage using AI coding tools,
-including ChatGPT and Codex**. Feature direction and testing are guided by visage;
-AI tools assist with implementation, debugging, and documentation. This describes
-the development of this fork's enhancements, not the original Weland code.
+The enhancements in this fork are developed by using AI coding tools. Feature direction and testing are guided by the repo creator;
 
-## Added features
+##Notable Added features
 
 ### Drawing and geometry
 
@@ -32,8 +28,6 @@ the development of this fork's enhancements, not the original Weland code.
   individual polygons remain within the engine's eight-vertex limit.
 - **Stairs:** add stepped floor heights to rings and tessellated patterns. Ring
   heights progress clockwise; ceilings can stay fixed or follow the floor.
-- **Filled or outline:** choose whether box, circle, tessellation, and ring tools
-  create polygons or only their boundary geometry.
 - **Line cuts:** attach new vertices to existing lines and split polygons with
   the Line tool.
 
@@ -48,8 +42,6 @@ the development of this fork's enhancements, not the original Weland code.
 - Right-click and drag to move the selection.
 - Mirror horizontally, flip vertically, or shift selected floor and/or ceiling
   heights from the Select sidebar.
-- **Ctrl+A** selects all geometry; **Ctrl+Shift+A** deselects it. **Ctrl+C** copies;
-  **Ctrl+V** starts paste placement; Escape cancels the preview.
 - **Undo/redo history** with up to 100 actions and a clickable history panel.
 - Right-click eyedroppers for heights, liquids, sounds, textures, and polygon types.
 - Configurable line width, vertex size, and separate hover highlight colors for
@@ -57,7 +49,7 @@ the development of this fork's enhancements, not the original Weland code.
 
 ### Scenarios, terminals, and scripts
 
-- Open, switch between, edit, and save multiple maps in a **merged scenario**.
+- Open, switch between, edit, and save multiple maps inside an already **merged scenario**.
 - **Visual terminal editor** with scalable previews, page editing, and picture
   import while preserving image proportions.
 - **Embed Lua scripts** in individual levels, with scripts preserved during
