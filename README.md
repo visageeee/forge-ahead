@@ -1,79 +1,139 @@
 # Forge Ahead
 
-Map editor for Marathon. An expanded fork of Weland using .NET 8 and GTK 3,
-with box/circle/ring tools, insets, selection copy/paste, transforms, undo
-history, merged scenarios, terminal editing, and embedded Lua.
+**Map editor for Marathon**
 
-Repository: https://github.com/visageeee/forge-ahead
+Forge Ahead is an expanded fork of [Weland](https://github.com/treellama/weland),
+the Marathon map editor originally created by Gregory Smith. It supports map
+editing for Marathon, Aleph One, and Sprintathon, using .NET 8 and GTK 3.
 
-For Windows, macOS, and Linux packages, automated GitHub builds, and release
-instructions, see [packaging/BUILDING.md](packaging/BUILDING.md).
+Previously called **Weland SE**, this fork was renamed **Forge Ahead on request**.
+The new name distinguishes the expanded fork from the original Weland project.
 
-To run from source with .NET 8 and system GTK 3:
+## Development with AI
+
+The enhancements in this fork are developed by **visage using AI coding tools,
+including ChatGPT and Codex**. Feature direction and testing are guided by visage;
+AI tools assist with implementation, debugging, and documentation. This describes
+the development of this fork's enhancements, not the original Weland code.
+
+## Added features
+
+### Drawing and geometry
+
+- **Box tool:** draw snapped rectangular polygons, connect to existing geometry,
+  and create insets at interiors, edges, and corners. Intersections can split
+  existing convex polygons while reusing shared vertices and lines.
+- **Circle tool:** draw many-sided polygons with a configurable side count,
+  including insets into existing polygons.
+- **Tessellation:** drag out connected patterns of triangles, squares, hexagons,
+  or octagons with square fillers, using a chosen edge length.
+- **Ring tool:** create circular or elliptical rings with up to 128 outer sides
+  and multiple connected inner rings. Rings are built from convex sectors so
+  individual polygons remain within the engine's eight-vertex limit.
+- **Stairs:** add stepped floor heights to rings and tessellated patterns. Ring
+  heights progress clockwise; ceilings can stay fixed or follow the floor.
+- **Filled or outline:** choose whether box, circle, tessellation, and ring tools
+  create polygons or only their boundary geometry.
+- **Line cuts:** attach new vertices to existing lines and split polygons with
+  the Line tool.
+
+### Selection and editing
+
+- Drag selection boxes and Shift-click to select multiple geometry items,
+  including polygons.
+- **Copy and paste** selected geometry, with a placement preview. Polygon copies
+  include settings, textures, contained objects, and annotations.
+- **Move, rotate, and scale** selections. Scaling supports independent axes and
+  warping; hold Shift for constrained scaling. Pan is a separate tool.
+- Right-click and drag to move the selection.
+- Mirror horizontally, flip vertically, or shift selected floor and/or ceiling
+  heights from the Select sidebar.
+- **Ctrl+A** selects all geometry; **Ctrl+Shift+A** deselects it. **Ctrl+C** copies;
+  **Ctrl+V** starts paste placement; Escape cancels the preview.
+- **Undo/redo history** with up to 100 actions and a clickable history panel.
+- Right-click eyedroppers for heights, liquids, sounds, textures, and polygon types.
+- Configurable line width, vertex size, and separate hover highlight colors for
+  vertices, lines, and polygons.
+
+### Scenarios, terminals, and scripts
+
+- Open, switch between, edit, and save multiple maps in a **merged scenario**.
+- **Visual terminal editor** with scalable previews, page editing, and picture
+  import while preserving image proportions.
+- **Embed Lua scripts** in individual levels, with scripts preserved during
+  visual-mode round trips.
+- Export **MML** for extra texture/scenery collections and custom fog settings.
+- Repair wall-surface references with **Clean Up Wall Surfaces**. **Pave** fills
+  missing textures while preserving already textured surfaces.
+- Improvements to interactive editing performance and visual-mode return handling.
+
+See [the tool guide](BOX-TOOL.md) for options, geometry limits, and detailed behavior.
+Copy/paste currently uses an internal clipboard for the active level.
+
+## Downloads
+
+Get platform packages from [GitHub Releases](https://github.com/visageeee/forge-ahead/releases/latest).
+
+| Platform | Launch |
+| --- | --- |
+| Windows x64 | Extract the complete ZIP and open `ForgeAhead.exe`. |
+| macOS Apple Silicon or Intel | Extract the matching ZIP and move `Forge Ahead.app` to Applications. |
+| Linux x64 | Extract the archive and run `Start-Forge-Ahead.sh`. |
+
+Packages include the .NET runtime. Windows and macOS also include GTK; Linux
+uses system GTK 3. On Ubuntu 24.04, install the native dependencies with:
 
 ```sh
+sudo apt install libgtk-3-0t64 librsvg2-common adwaita-icon-theme
+```
+
+Keep each package's files together. macOS packages are ad-hoc signed rather than
+Apple-notarized; see [packaging instructions](packaging/BUILDING.md) for platform
+requirements and first-launch details.
+
+Scenario assets, including Shapes and Sounds, are installed separately.
+Aleph One or Sprintathon is also installed separately for visual mode.
+
+## Run from source
+
+Install the **.NET 8 SDK** and GTK 3, then:
+
+```sh
+git clone --branch weland-gtk3 https://github.com/visageeee/forge-ahead.git
+cd forge-ahead
 dotnet run --project Weland.csproj
 ```
 
 The source project and C# namespace retain the Weland name. Published binaries
-are named `ForgeAhead` (`ForgeAhead.exe` on Windows). Existing preferences and
-plugin folders are preserved. Plugins referencing the old assembly must be
-rebuilt against the ForgeAhead assembly.
+use the ForgeAhead name. Existing preferences and plugin folders are preserved;
+plugins referencing the old assembly must be rebuilt against ForgeAhead.
 
-The historical instructions below describe the original GTK 2 version.
+Run the automated geometry and serialization checks with:
 
-# Overview
+```sh
+dotnet run --project tests/BoxToolTests.csproj -c Release
+```
 
-Weland is a Marathon map editor by Gregory Smith, written in C#, and
-using GTK#
+For local packaging and GitHub Actions builds, see
+[packaging/BUILDING.md](packaging/BUILDING.md).
 
-It is available under the GNU General Public License, see the file
-COPYING for details.
+## Visual mode
 
-# Install
+In Preferences, choose your Shapes file, scenario, and Aleph One or Sprintathon
+executable. Configure the engine's visual-mode script or plugin, then use Visual
+Mode from the View menu. Quit the engine to return the edited map to Forge Ahead.
+Terminal editing, Lua embedding, and MML export are available in the editor;
+3D texturing uses the external engine.
 
-To run Weland, you will need a C# runtime (either .NET 4 or Mono 2.10 or
-higher), as well as GTK#
+## Credits and license
 
-## Windows
+**Enhancements by visage**, developed with AI assistance.
 
-1. Make sure you have the .NET runtime installed
+**Original Weland app by:** Gregory Smith. Original contributors include
+mijienke (custom grid), effigy (tooltips), and Eric Peterson (Smithy).
 
-    https://www.microsoft.com/en-in/download/details.aspx?id=30653
-    
-2. Install the GTK# for .NET package. _(This version seems to work best with Windows, and the official installers have gone offline, so I added it to the Weland releases page)_
+Application icon by Robert Kreps. Tool artwork includes work from
+tango-art-libre, GIMP, and openclipart.org.
 
-    https://github.com/treellama/weland/releases/download/gtk-sharp/gtk-sharp-2.12.26.msi
-
-3. Open Weland.exe like any other app
-
-## Mac OS X
-
-1. Download the Mono runtime, which includes everything you need:
-
-    https://www.mono-project.com/download/stable/#download-mac
-    
-2. Open Weland.exe like any other app
-
-## Linux
-
-1. Install Mono and gtk-sharp2 from your distribution's package system. Then:
-
-    ```
-    make
-    mono Weland.exe
-    ```
-
-# Visual Mode
-
-Weland does not come with a built-in Visual Mode, but it can use the new command line arguments in Aleph One 1.4 or higher to pass maps into Aleph One to texture with a visual mode Lua script. 
-
-## Setup 
-
-1. In Weland's preferences, choose a shapes file, the scenario you want to use, and a copy of Aleph One 1.4 or higher.
-2. Press "Edit Preferences" in the Visual Mode section of Weland's preferences.
-3. Aleph One will start up--configure it with the window size you want, turn sound off if for the authentic Visual Mode experience, and most importantly, choose a texture editing script like Visual Mode.lua or the Vasara plugin (both downloaded separately)
-4. Quit Aleph One
-5. When you want to texture a map, choose Visual Mode from the View menu. Make any changes to the map, and quit Aleph One. Texture changes will automatically be imported back into Weland.
-
-
+Forge Ahead is distributed under the **GNU General Public License, version 2**.
+See [COPYING.txt](COPYING.txt) for the license.
