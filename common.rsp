@@ -6,6 +6,7 @@
 
 level/Annotation.cs
 Assembly.cs
+RuntimeSetup.cs
 BinaryReaderBE.cs
 BinaryWriterBE.cs
 CrcStream.cs

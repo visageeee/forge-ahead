@@ -1,3 +1,10 @@
+## Weland SE (.NET 8 / GTK 3)
+
+For Windows and macOS packages, automated GitHub builds, and release instructions,
+see [packaging/BUILDING.md](packaging/BUILDING.md).
+
+The historical instructions below describe the original GTK 2 version.
+
 # Overview
 
 Weland is a Marathon map editor by Gregory Smith, written in C#, and

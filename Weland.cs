@@ -69,6 +69,13 @@ namespace Weland
 
         public static int Main(string[] args)
         {
+            RuntimeSetup.Configure();
+            return RunGtk(args);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static int RunGtk(string[] args)
+        {
             AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(OnUnhandledException);
             GLib.ExceptionManager.UnhandledException += new GLib.UnhandledExceptionHandler(OnUnhandledException);
 
