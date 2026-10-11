@@ -118,6 +118,7 @@ namespace Weland
             }
             set
             {
+                if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
                 historyGesture = false;
                 CancelBox();
                 CancelSelectionBox();
@@ -416,6 +417,23 @@ namespace Weland
             return new Point((short)(Math.Round(r * Math.Cos(theta)) + StartX), (short)(Math.Round(r * Math.Sin(theta)) + StartY));
         }
 
+        Wadfile.DirectoryEntry lineBefore;
+        Selection lineSelectionBefore;
+        bool lineChangedBefore;
+        public string LineToolError { get; private set; }
+        void AbortLine() {
+            if (lineBefore != null) { Level.Load(lineBefore.Clone()); Selection.CopyFrom(lineSelectionBefore); Changed = lineChangedBefore; }
+            Level.TemporaryLineStartIndex = -1; lineBefore = null; CancelPendingUndo(); RedrawAll = true;
+        }
+        Point SnapLinePoint(Point point, Line line) {
+            Point a = Level.Endpoints[line.EndpointIndexes[0]], b = Level.Endpoints[line.EndpointIndexes[1]];
+            int dx = b.X-a.X, dy = b.Y-a.Y, x = Math.Abs(dx), y = Math.Abs(dy);
+            while (y != 0) { int remainder = x % y; x = y; y = remainder; }
+            if (x == 0) return a;
+            double t = ((double)(point.X-a.X)*dx+(double)(point.Y-a.Y)*dy)/((double)dx*dx+(double)dy*dy);
+            int step = (int)Math.Round(Math.Max(0,Math.Min(1,t))*x);
+            return new Point((short)(a.X+step*(dx/x)),(short)(a.Y+step*(dy/x)));
+        }
         bool CanSplitLine(short index)
         {
             Line line = Level.Lines[index];
@@ -434,12 +452,14 @@ namespace Weland
                 return false;
             }
 
-            return SplitPolygonLines;
+            return true;
         }
 
         public void StartLine(short X, short Y)
         {
             SetUndo();
+            lineBefore = Level.Save().Clone(); lineSelectionBefore = new Selection(); lineSelectionBefore.CopyFrom(Selection);
+            lineChangedBefore = Changed; LineToolError = null;
             Selection.Clear();
             Point p = new Point(X, Y);
             short index = ClosestPoint(p);
@@ -458,11 +478,13 @@ namespace Weland
             else
             {
                 index = Level.GetClosestLine(p);
-                if (index != -1 && Level.Distance(p, Level.Lines[index]) < DefaultSnap() && CanSplitLine(index))
+                if (index != -1 && Level.Distance(p, Level.Lines[index]) < DefaultSnap())
                 {
                     //split
-                    Point onLine = Level.ClosestPointOnLine(p, Level.Lines[index]);
-                    Level.TemporaryLineStartIndex = Level.SplitLine(index, onLine.X, onLine.Y);
+                    Point onLine = SnapLinePoint(p, Level.Lines[index]);
+                    // Defer attachment until the cut can be validated as a whole.
+                    short existing = Level.GetClosestPoint(onLine);
+                    Level.TemporaryLineStartIndex = existing != -1 && Level.Endpoints[existing].X == onLine.X && Level.Endpoints[existing].Y == onLine.Y ? existing : Level.NewPoint(onLine.X, onLine.Y);
                     Level.TemporaryLineEnd = p;
                 }
                 else
@@ -508,6 +530,8 @@ namespace Weland
             }
             else
             {
+                short edge = Level.GetClosestLine(p);
+                if (edge != -1 && Level.Distance(p,Level.Lines[edge]) < DefaultSnap()) p = SnapLinePoint(p,Level.Lines[edge]);
                 Level.TemporaryLineEnd.X = p.X;
                 Level.TemporaryLineEnd.Y = p.Y;
             }
@@ -518,96 +542,50 @@ namespace Weland
 
         public void ConnectLine(short X, short Y, bool constrainAngle, bool constrainLength)
         {
-            if (Level.TemporaryLineStartIndex == -1)
-            {
-                return;
+            if (Level.TemporaryLineStartIndex == -1) return;
+            Point p = new Point(X,Y);
+            if (constrainAngle || constrainLength) p = Constrain(p,constrainAngle,constrainLength);
+            short snapPoint = ClosestPoint(p);
+            if (snapPoint == -1 && !constrainAngle && !constrainLength) { p = GridAdjust(p); snapPoint = ClosestPoint(p); }
+            if (snapPoint != -1) p = Level.Endpoints[snapPoint];
+            else {
+                short snapLine = Level.GetClosestLine(p);
+                if (snapLine != -1 && Level.Distance(p,Level.Lines[snapLine]) < DefaultSnap()) p = SnapLinePoint(p,Level.Lines[snapLine]);
             }
-
-            Point p = new Point(X, Y);
-            Point ap = GridAdjust(new Point(X, Y)); //custom grid code
-                                                    //Point ap = new Point(GridAdjust(X), GridAdjust(Y));	old code
-            Point z = ap;
-            if (constrainAngle || constrainLength)
-            {
-                p = Constrain(p, constrainAngle, constrainLength);
-                z = p;
+            Point start = Level.Endpoints[Level.TemporaryLineStartIndex];
+            if (Level.Distance(start,p) < DefaultSnap()) { AbortLine(); return; }
+            if (!Level.CutPolygonsWithLine(start,p,out bool handled,out string reason)) {
+                LineToolError = reason; AbortLine(); return;
             }
-
-            // don't draw really short lines
-            if (Level.Distance(Level.Endpoints[Level.TemporaryLineStartIndex], z) < DefaultSnap())
-            {
-                // if the start point is the latest created, and unconnected, remove it
-                bool connected = false;
-                if (Level.TemporaryLineStartIndex == Level.Endpoints.Count - 1)
-                {
-                    foreach (Line line in Level.Lines)
-                    {
-                        if (line.EndpointIndexes[0] == Level.TemporaryLineStartIndex || line.EndpointIndexes[1] == Level.TemporaryLineStartIndex)
-                        {
-                            connected = true;
-                            break;
-                        }
-                    }
-
-                    if (!connected)
-                    {
-                        Level.Endpoints.RemoveAt(Level.TemporaryLineStartIndex);
-                    }
-                }
-                Level.TemporaryLineStartIndex = -1;
-                return;
+            if (handled) {
+                Level.TemporaryLineStartIndex = -1; lineBefore = null;
+                Selection.Point = Level.GetClosestPoint(p); Changed = true; RedrawAll = true; return;
             }
-
-            short index = -1;
-            if (!constrainLength && !constrainAngle)
-            {
-                index = ClosestPoint(p);
-                if (index == -1)
-                {
-                    p = ap;
-                    index = ClosestPoint(p);
+            // Attach the deferred start even when drawing outside a polygon.
+            for (int edge = Level.Lines.Count-1; edge >= 0; --edge) {
+                var boundary = Level.Lines[edge]; Point a = Level.Endpoints[boundary.EndpointIndexes[0]], b = Level.Endpoints[boundary.EndpointIndexes[1]];
+                long cross = ((long)start.X-a.X)*(b.Y-a.Y)-((long)start.Y-a.Y)*(b.X-a.X);
+                if (cross == 0 && start.X>=Math.Min(a.X,b.X) && start.X<=Math.Max(a.X,b.X) && start.Y>=Math.Min(a.Y,b.Y) && start.Y<=Math.Max(a.Y,b.Y) &&
+                    boundary.EndpointIndexes[0]!=Level.TemporaryLineStartIndex && boundary.EndpointIndexes[1]!=Level.TemporaryLineStartIndex) {
+                    if (!CanSplitLine((short)edge)) { LineToolError="This attachment exceeds the eight-vertex limit."; AbortLine(); return; }
+                    Level.SplitLine((short)edge,start.X,start.Y,Level.TemporaryLineStartIndex);
                 }
             }
-            else
-            {
-                // should really connect if it's right on top of the other point!
-                index = Level.GetClosestPoint(p);
-                if (index != -1 && Level.Distance(p, Level.Endpoints[index]) > 1 / Scale)
-                {
-                    index = -1;
-                }
+            short endIndex = Level.GetClosestPoint(p);
+            if (endIndex == -1 || Level.Endpoints[endIndex].X != p.X || Level.Endpoints[endIndex].Y != p.Y) {
+                short edge = Level.GetClosestLine(p);
+                if (edge != -1 && Level.Distance(p,Level.Lines[edge]) < DefaultSnap()) {
+                    if (!CanSplitLine(edge)) { LineToolError="This attachment exceeds the eight-vertex limit."; AbortLine(); return; }
+                    Point onLine = SnapLinePoint(p,Level.Lines[edge]);
+                    endIndex = Level.SplitLine(edge,onLine.X,onLine.Y);
+                } else endIndex = Level.NewPoint(p.X,p.Y);
             }
-
-            if (index != -1)
-            {
-                Level.NewLine(Level.TemporaryLineStartIndex, index);
-                Selection.Point = index;
-            }
-            else
-            {
-                index = Level.GetClosestLine(p);
-                if (index != -1 && Level.Distance(p, Level.Lines[index]) < DefaultSnap() && CanSplitLine(index))
-                {
-                    Point onLine = Level.ClosestPointOnLine(p, Level.Lines[index]);
-                    Line line = Level.Lines[index];
-                    if (line.EndpointIndexes[0] != Level.TemporaryLineStartIndex && line.EndpointIndexes[1] != Level.TemporaryLineStartIndex)
-                    {
-                        Level.NewLine(Level.TemporaryLineStartIndex, Level.SplitLine(index, onLine.X, onLine.Y));
-                    }
-                    else
-                    {
-                        Level.SplitLine(index, onLine.X, onLine.Y);
-                    }
-                }
-                else
-                {
-                    Level.NewLine(Level.TemporaryLineStartIndex, Level.NewPoint(p.X, p.Y));
-                }
-                Selection.Point = (short)(Level.Endpoints.Count - 1);
-            }
-            Level.TemporaryLineStartIndex = -1;
-
-            Changed = true;
+            bool exists = Level.Lines.Exists(line => (line.EndpointIndexes[0] == Level.TemporaryLineStartIndex && line.EndpointIndexes[1] == endIndex) ||
+                (line.EndpointIndexes[1] == Level.TemporaryLineStartIndex && line.EndpointIndexes[0] == endIndex));
+            if (!exists && endIndex != Level.TemporaryLineStartIndex) Level.NewLine(Level.TemporaryLineStartIndex,endIndex);
+            Selection.Point = endIndex;
+            Level.TemporaryLineStartIndex = -1; lineBefore = null;
+            Changed = true; RedrawAll = true;
         }
 
         void Fill(short X, short Y)

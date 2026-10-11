@@ -393,6 +393,42 @@ namespace Weland
             }
             List<List<Point>> pieces = null;
             if (!rectangular && !InsetPieces(original, inset, out pieces, out reason)) return false;
+            return RebuildSplitPolygon(index, source => {
+                string buildReason;
+                Point[][] boxes = {
+                    new[] { min, new Point(max.X, top) },
+                    new[] { new Point(min.X, bottom), max },
+                    new[] { new Point(min.X, top), new Point(left, bottom) },
+                    new[] { new Point(right, top), new Point(max.X, bottom) },
+                    new[] { new Point(left, top), new Point(right, bottom) }
+                };
+                if (rectangular)
+                {
+                    foreach (Point[] box in boxes)
+                    {
+                        if (box[0].X == box[1].X || box[0].Y == box[1].Y) continue;
+                        if (!CreatePlainBox(box[0], box[1], out buildReason)) return buildReason;
+                        CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
+                    }
+                }
+                else
+                {
+                    foreach (List<Point> piece in pieces)
+                    {
+                        if (!CreatePlainShape(piece, out buildReason)) return buildReason;
+                        CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
+                    }
+                    if (!CreatePlainShape(inset, out buildReason)) return buildReason;
+                    CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
+                }
+                return null;
+            }, out reason);
+        }
+
+        bool RebuildSplitPolygon(short index, Func<Polygon,string> build, out string reason)
+        {
+            reason = null;
+            Polygon original = Polygons[index];
             var walls = new List<BoxWall>();
             // Detach the perimeter without deleting objects, references, or
             // neighboring polygons. Store textured sides before splitting.
@@ -421,32 +457,8 @@ namespace Weland
             // teleporter and script references continue to refer to that index.
             Polygons[index] = new Polygon { VertexCount = 0 };
             int first = Polygons.Count;
-            Point[][] boxes = {
-                new[] { min, new Point(max.X, top) },
-                new[] { new Point(min.X, bottom), max },
-                new[] { new Point(min.X, top), new Point(left, bottom) },
-                new[] { new Point(right, top), new Point(max.X, bottom) },
-                new[] { new Point(left, top), new Point(right, bottom) }
-            };
-            if (rectangular)
-            {
-                foreach (Point[] box in boxes)
-                {
-                    if (box[0].X == box[1].X || box[0].Y == box[1].Y) continue;
-                    if (!CreatePlainBox(box[0], box[1], out reason)) return false;
-                    CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
-                }
-            }
-            else
-            {
-                foreach (List<Point> piece in pieces)
-                {
-                    if (!CreatePlainShape(piece, out reason)) return false;
-                    CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
-                }
-                if (!CreatePlainShape(inset, out reason)) return false;
-                CopyBoxSettings(original, Polygons[Polygons.Count - 1]);
-            }
+            reason = build(original);
+            if (reason != null) return false;
             short centerIndex = (short)(Polygons.Count - 1);
             Polygons[index] = Polygons[centerIndex];
             Polygons.RemoveAt(centerIndex);
@@ -484,11 +496,12 @@ namespace Weland
             short PartFor(Point p)
             {
                 // Inclusive bounds give objects on an internal edge a stable
-                // valid owner, with the inset taking priority.
-                bool insideInset = true;
-                for (int e = 0; e < inset.Count; ++e)
-                    if (ShapeCross(inset[e], inset[(e + 1) % inset.Count], p) < 0) insideInset = false;
-                if (insideInset) return index;
+                // valid owner, with the retained polygon taking priority.
+                bool insideRetained = true;
+                for (int e = 0; e < Polygons[index].VertexCount; ++e)
+                    if (ShapeCross(Endpoints[Polygons[index].EndpointIndexes[e]],
+                        Endpoints[Polygons[index].EndpointIndexes[(e + 1) % Polygons[index].VertexCount]], p) < 0) insideRetained = false;
+                if (insideRetained) return index;
                 for (int i = first; i < Polygons.Count; ++i)
                 {
                     Polygon polygon = Polygons[i];

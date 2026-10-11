@@ -163,6 +163,64 @@ Select vertices, lines or polygons, then choose Scale (S). Drag away from the ce
 Selected polygons carry their objects and annotations; object facing and polygon heights stay unchanged. Shared endpoints scale once, and each drag is one undo/redo step. Scaling that would collapse vertices, lines or polygons, or exceed map coordinate limits, is ignored. Right-drag still moves the selection.
 
 Paving uses an available wall collection from the loaded Shapes file and palette zero, rather than assuming the stock scenario's bitmap indices exist. Paving skips uniform-color placeholder bitmaps. If stock default indices are placeholders or absent, it chooses detailed bitmaps from that wall collection instead. If no wall collection is loaded, Pave, cleanup and Nuke Textures leave the map unchanged and explain how to load Shapes.
+# Terminal editor
+
+Use **Special → Level Terminals…** for embedded map terminals. Add a terminal,
+then edit its text directly on the black terminal preview. Select text and use
+**Bold**, **Italic**, **Underline**, or **Apply color** to format it. The eight
+colors use Aleph One's standard palette. **Import text** replaces the current
+page's text and formatting. **Apply** makes one undoable map edit; save normally
+to keep it. Cancel discards the dialog's changes.
+
+Each terminal has a stable zero-based ID. Set a wall's **Terminal** control-panel
+permutation to that ID in the line parameters. New terminals append to the list;
+existing IDs and unedited terminal bytes are retained. The numbered page list
+reads top to bottom in file/playback order. Branch markers are labeled separately;
+the engine chooses Unfinished, Success, or Failure according to completion state.
+Use **Move earlier ↑** / **Move later ↓** to change the selected page's order.
+Add, remove, and reorder pages/actions within a terminal. **Unfinished**, **Success**, and **Failure**
+start completion branches; **End** closes a branch.
+
+If a terminal has only display/action pages and no completion branch,
+Apply adds **Unfinished** at the beginning and **End** at the end automatically.
+For example: Unfinished → Logon → Picture → Logoff → End. The engine needs this
+entry branch to activate the terminal. Explicit branches and Marathon 1 terminals
+keep their existing structure.
+
+Action/resource ID sets the
+destination polygon, zero-based destination level, sound, tag, or picture ID,
+depending on the page type. Text supports the engine's Mac Roman character set,
+including Swedish letters; unsupported characters are rejected rather than lost.
+
+The preview keeps the engine's standard **640 × 320 (2:1)** frame, including
+when the dialog is maximized. **Preview zoom** enlarges the complete frame,
+including text and pictures, from 100% to 300% (default 150%). Scroll to reach the
+edges when the enlarged preview exceeds the window. Zoom is remembered and only
+affects the editor display. Pictures retain their own proportions and shrink
+to fit without stretching. Picture and logon/logoff pages load matching IDs
+from the open map, its Mac resource fork, the configured scenario's map files,
+and the Shapes file. **Picture resources…** selects another original scenario
+Map/resource file when working on an exported level. That path is remembered.
+Supported sources include picture WAD entries, MacBinary resource forks and
+AppleDouble sidecars; supported images include classic PICT bitmap data
+(indexed PackBits, RGB555 and RGB32), Windows `pict`/`clut` data and PNG/JPEG.
+Missing or unsupported pictures report a reason below the preview.
+
+**Import picture…** accepts PNG, JPEG and other GdkPixbuf-supported image files.
+It fits the image to the selected left/right/centered area while retaining its
+aspect ratio, composites transparency onto black, assigns an unused resource ID,
+and updates the selected page. Apply, then save the map to embed the image as a
+standard RGB32 PICT resource. Imports need no external image files afterward.
+Cancel discards pending imports; Apply records them with the terminal edits in
+one undo step. Existing resource WADs are preserved when exporting a level. Maps containing
+resource entries use engine WAD version 4; one-entry maps use version 2. To repair
+a map previously written with incorrect version 3, open it and save it again.
+
+A checkpoint ID names a map goal rather than a picture; checkpoint-map previews
+are not implemented. This editor does not import legacy external terminal text
+resources. Fonts, pagination, and custom scenario chrome
+remain approximate. Check the terminal in-game before distributing the map.
+
 # Embedded Lua
 
 Use **Special → Level Lua Scripts…** to add or import `.lua` files into the current
@@ -209,3 +267,17 @@ fog affects all levels while the script is loaded. For settings limited to a sin
 level, embed the MML with Atque. Custom scenarios may need to merge these entries
 into their existing scripts to control loading order. Fog is visible in Aleph One,
 not in the editor's 2D view. This initial export dialog does not import scripts.
+
+# Line tool polygon cuts
+
+Draw a straight line from an existing polygon vertex or edge to another edge or
+vertex to divide the polygon automatically. Starting or ending partway along an
+edge creates a shared vertex. A cut can cross adjacent convex polygons and splits
+each one it passes through. Drawing along an existing edge reuses the geometry.
+Ordinary lines drawn outside polygons can also attach to their edges.
+
+The resulting polygons retain heights, textures and other settings; objects and
+annotations move to the appropriate polygon. One completed cut is one undo step.
+Changing tools cancels an unfinished line. Incomplete cuts ending inside a polygon,
+concave cuts, nonintegral edge crossings, and geometry exceeding the eight-vertex
+limit are rejected without leaving partial geometry.

@@ -1375,6 +1375,14 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkMenuItem" id="level-terminals">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Level Terminals…</property>
+                        <signal name="activate" handler="OnTerminalEditor" swapped="no"/>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkMenuItem" id="level-lua-scripts">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>

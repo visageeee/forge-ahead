@@ -10,6 +10,6 @@
     <Compile Include="../LevelMml.cs" />
     <Compile Include="../level/*.cs" />
     <Compile Include="../shapes/*.cs" />
-    <Compile Include="../BinaryReaderBE.cs;../BinaryWriterBE.cs;../CrcStream.cs;../Wadfile.cs;../Geometry.cs;../BoxGeometry.cs;../SelectionBox.cs;../NestedBox.cs;../CircleTool.cs;../MoveTool.cs;../RotateTool.cs;../ScaleTool.cs;../UndoHistory.cs;../Editor.cs;../Settings.cs" />
+    <Compile Include="../BinaryReaderBE.cs;../BinaryWriterBE.cs;../CrcStream.cs;../Wadfile.cs;../Geometry.cs;../BoxGeometry.cs;../LineCut.cs;../SelectionBox.cs;../NestedBox.cs;../CircleTool.cs;../MoveTool.cs;../RotateTool.cs;../ScaleTool.cs;../UndoHistory.cs;../Editor.cs;../Settings.cs" />
   </ItemGroup>
 </Project>

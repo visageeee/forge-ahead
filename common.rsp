@@ -25,6 +25,10 @@ LevelMml.cs
 gtk-sharp/MmlExport.cs
 level/EmbeddedLua.cs
 gtk-sharp/LuaScriptsDialog.cs
+level/TerminalDocument.cs
+level/TerminalPictures.cs
+level/TerminalPictureImports.cs
+gtk-sharp/TerminalEditor.cs
 gtk-sharp/CircleOptions.cs
 gtk-sharp/HistoryPanel.cs
 mac/IgeMacMenu.cs
@@ -136,3 +140,5 @@ gtk-sharp/Widgets.cs
 
 
 shapes/PaveTextureSelection.cs
+
+LineCut.cs

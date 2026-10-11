@@ -71,6 +71,298 @@ class BoxToolTests
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         int passed = 0;
         void Test(string name, Action action) { action(); Console.WriteLine("PASS " + name); ++passed; }
+        byte[] PictureFixture(int depth, bool packed, byte[] pixels, int width = 8) {
+            using var stream = new System.IO.MemoryStream(); using var writer = new BinaryWriterBE(stream);
+            void W(int n) => writer.Write((ushort)n);
+            void Rect() { W(0); W(0); W(1); W(width); }
+            W(0); Rect(); W(0x11); W(0x2ff); W(depth > 8 ? 0x9a : 0x98);
+            if (depth > 8) writer.Write(0);
+            W(0x8000 | (width * depth / 8)); Rect(); W(0); W(packed ? 0 : 1);
+            writer.Write(new byte[14]); W(depth); W(depth > 8 ? 3 : 1); writer.Write(new byte[14]);
+            if (depth <= 8) {
+                writer.Write(0); W(0); W(1);
+                W(0); W(65535); W(0); W(0); // red
+                W(1); W(0); W(65535); W(0); // green
+            }
+            Rect(); Rect(); W(0);
+            if (packed) writer.Write((byte)pixels.Length);
+            writer.Write(pixels); if ((stream.Length & 1) != 0) writer.Write((byte)0); W(0xff);
+            return stream.ToArray();
+        }
+        byte[] ResourceFixture(byte[] picture) {
+            int map = 260 + picture.Length;
+            var bytes = new byte[map + 50];
+            void W(int at, int n) { bytes[at] = (byte)(n >> 8); bytes[at+1] = (byte)n; }
+            void L(int at, int n) { W(at,n >> 16); W(at+2,n); }
+            L(0,256); L(4,map); L(8,picture.Length+4); L(12,50);
+            L(256,picture.Length); Buffer.BlockCopy(picture,0,bytes,260,picture.Length);
+            W(map+24,28); W(map+28,0); L(map+30,(int)Wadfile.Chunk("PICT")); W(map+34,0); W(map+36,10);
+            W(map+38,10001); W(map+40,65535); // ID, unnamed resource, attribute/data-offset = zero
+            return bytes;
+        }
+        Test("line tool cuts edge to edge and vertex to vertex with undo", () => {
+            foreach(bool diagonal in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;
+                string before=CanonicalSnapshot(level); editor.StartLine(0,diagonal?(short)0:(short)500);editor.ConnectLine(1000,diagonal?(short)1000:(short)500,false,false);editor.CommitHistory(true);
+                Check(level.Polygons.Count==2,"Line did not cut polygon: "+editor.LineToolError);Validate(level);
+                Check(level.Endpoints.Count==(diagonal?4:6),"Duplicate or missing edge vertices");
+                editor.Undo();Check(CanonicalSnapshot(level)==before,"Line cut undo did not restore original map");editor.Redo();Check(level.Polygons.Count==2,"Line cut redo failed");
+            }
+        });
+        Test("line cut crosses adjacent polygons and preserves shared topology", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            Check(level.CutPolygonsWithLine(P(0,500),P(2000,500),out bool handled,out string reason) && handled,reason);
+            Check(level.Polygons.Count==4,"Adjacent polygons not both cut");Validate(level);
+            Check(level.Endpoints.Count==9,"Shared intersection vertex duplicated");
+        });
+        Test("line cut preserves settings wall textures objects and save load", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.Pave();level.Polygons[0].FloorHeight=123;
+            foreach(var side in level.Sides)side.Primary.Texture=(ShapeDescriptor)123;
+            level.Objects.Add(new MapObject{X=250,Y=250,PolygonIndex=0});level.Objects.Add(new MapObject{X=750,Y=750,PolygonIndex=0});
+            Check(level.CutPolygonsWithLine(P(0,500),P(1000,500),out bool handled,out string reason) && handled,reason);
+            Check(level.Polygons.All(p=>p.FloorHeight==123),"Cut lost polygon settings");
+            Check(level.Sides.All(s=>s.Primary.Texture.Equals((ShapeDescriptor)123)),"Cut lost perimeter textures");
+            Check(level.Objects[0].PolygonIndex!=level.Objects[1].PolygonIndex,"Cut did not reassign objects");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Polygons.Count==2,"Cut lost on save/load");
+        });
+        Test("failed and cancelled polygon line cuts restore map without a history step", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;string before=CanonicalSnapshot(level);
+            editor.StartLine(0,500);editor.ConnectLine(500,500,false,false);
+            Check(CanonicalSnapshot(level)==before && !editor.CanUndo && editor.LineToolError!=null,"Incomplete cut changed map or history");
+            editor.StartLine(0,500);editor.ConnectLine(0,500,false,false);Check(CanonicalSnapshot(level)==before,"Cancelled line left edge vertices");
+        });
+        Test("line tool attaches outside polygons and reuses existing boundary segments", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;
+            editor.StartLine(0,500);editor.ConnectLine(-500,500,false,false);editor.CommitHistory(true);
+            Check(level.Polygons.Count==1 && level.Polygons[0].VertexCount==5 && level.Endpoints.Count==6,"Outside attachment failed");Validate(level);
+            editor.StartLine(1000,250);editor.ConnectLine(1000,750,false,false);editor.CommitHistory(true);Validate(level);
+            Check(level.Polygons.Count==1,"Boundary segment unnecessarily split polygon");
+            int lines=level.Lines.Count,points=level.Endpoints.Count;editor.StartLine(1000,250);editor.ConnectLine(1000,750,false,false);
+            Check(level.Lines.Count==lines && level.Endpoints.Count==points,"Redrawing boundary duplicated geometry");
+        });
+        Test("line tool cuts an eight-sided polygon and cancels on tool change", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new System.Collections.Generic.List<Point>{P(0,300),P(300,0),P(700,0),P(1000,300),P(1000,700),P(700,1000),P(300,1000),P(0,700)},out string reason),reason);
+            var editor=Editor(level);editor.Tool=Tool.Line;string before=CanonicalSnapshot(level);
+            editor.StartLine(0,500);editor.Tool=Tool.Select;
+            Check(CanonicalSnapshot(level)==before && !editor.CanUndo,"Tool change left unfinished line geometry");
+            editor.Tool=Tool.Line;editor.StartLine(0,500);editor.ConnectLine(1000,500,false,false);
+            Check(level.Polygons.Count==2,editor.LineToolError);Validate(level);
+        });
+        Test("terminal pictures decode indexed PICT PackBits and direct RGB rows", () => {
+            var indexed = new TerminalPicture { Data = PictureFixture(8,true,new byte[] { 0xf9, 1 }) }.Decode();
+            Check(indexed.Width == 8 && indexed.Height == 1 && indexed.Data.SequenceEqual(Enumerable.Range(0,24).Select(i=>(byte)(i%3==1?255:0))),"Indexed PackBits picture wrong");
+            var literal = new TerminalPicture { Data = PictureFixture(8,true,new byte[] { 7,0,1,0,1,0,1,0,1 }) }.Decode();
+            Check(literal.Data[0]==255 && literal.Data[4]==255,"Literal PackBits picture wrong");
+            foreach (bool packed in new[]{false,true}) {
+                var pixels = packed ? new byte[]{0xf9,0x7c,0} : Enumerable.Range(0,16).Select(i=>(byte)(i%2==0?0x7c:0)).ToArray();
+                var direct = new TerminalPicture { Data = PictureFixture(16,packed,pixels) }.Decode();
+                Check(direct.Data[0]==255 && direct.Data[1]==0 && direct.Data[2]==0 && direct.Data[21]==255,"16-bit picture wrong");
+                pixels = packed ? new byte[]{0xe9,0x80} : Enumerable.Range(0,32).Select(i=>(byte)(i%4==0?0:128)).ToArray();
+                direct = new TerminalPicture { Data = PictureFixture(32,packed,pixels) }.Decode();
+                Check(direct.Data.All(v=>v==128),"32-bit planar/chunky picture wrong");
+            }
+        });
+        Test("terminal pictures resolve map WAD and Windows bitmap color tables", () => {
+            var file = new Wadfile(); var entry = new Wadfile.DirectoryEntry(); file.Directory[10001]=entry;
+            byte[] pict = PictureFixture(8,false,new byte[]{0,1,0,1,0,1,0,1});
+            entry.Chunks[Wadfile.Chunk("PICT")]=pict;
+            Check(TerminalPicture.FromWad(file,10001).Decode().Width==8 && TerminalPicture.FromWad(file,2)==null,"Wrong resource ID lookup");
+            entry.Chunks.Clear(); var raw = new byte[]{0,0,0,0,0,1,0,2,0,8,0,1}; var clut = new byte[1542]; clut[6]=255; clut[14]=255;
+            entry.Chunks[Wadfile.Chunk("pict")]=raw; entry.Chunks[Wadfile.Chunk("clut")]=clut;
+            var image=TerminalPicture.FromWad(file,10001).Decode();
+            Check(image.Width==2 && image.Data.SequenceEqual(new byte[]{255,0,0,0,255,0}),"Windows palette wrong");
+            entry.Chunks[Wadfile.Chunk("pict")]=new byte[]{0,0,0,0,0,1,0,1,0,16,0x7c,0};
+            Check(TerminalPicture.FromWad(file,10001).Decode().Data[0]==255,"Windows RGB555 wrong");
+            string path=System.IO.Path.GetTempFileName();
+            try { file.Save(path); Check(TerminalPicture.FromFile(path,10001).Decode().Width==1,"WAD file lookup failed"); }
+            finally { System.IO.File.Delete(path); }
+        });
+        Test("terminal pictures read resource forks MacBinary and AppleDouble sidecars", () => {
+            byte[] pict=PictureFixture(8,false,new byte[]{0,1,0,1,0,1,0,1}), fork=ResourceFixture(pict);
+            Check(TerminalPicture.FromResourceFork(fork,10001).Data.SequenceEqual(pict),"Mac resource lookup wrong");
+            Check(TerminalPicture.FromResourceFork(fork,999)==null,"Missing resource resolved to another ID");
+            string path=System.IO.Path.GetTempFileName(); string sidecar=System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),"._"+System.IO.Path.GetFileName(path));
+            void L(byte[] data,int at,int n) { for(int i=0;i<4;++i)data[at+i]=(byte)(n >> (24-8*i)); }
+            try {
+                var mac=new byte[256+fork.Length];mac[1]=1;mac[2]=(byte)'x';L(mac,83,1);L(mac,87,fork.Length);Buffer.BlockCopy(fork,0,mac,256,fork.Length);
+                System.IO.File.WriteAllBytes(path,mac); Check(TerminalPicture.FromFile(path,10001).Decode().Width==8,"MacBinary picture missing");
+                var apple=new byte[38+fork.Length];L(apple,0,0x51607);apple[25]=1;L(apple,26,2);L(apple,30,38);L(apple,34,fork.Length);Buffer.BlockCopy(fork,0,apple,38,fork.Length);
+                System.IO.File.WriteAllBytes(path,new byte[1]); System.IO.File.WriteAllBytes(sidecar,apple);
+                Check(TerminalPicture.FromFile(path,10001).Decode().Width==8,"AppleDouble picture missing");
+            } finally { System.IO.File.Delete(path);System.IO.File.Delete(sidecar); }
+        });
+        Test("terminal pictures reject truncated oversized and invalid compressed data", () => {
+            void Bad(byte[] bytes) {
+                bool rejected=false; try { new TerminalPicture {Data=bytes}.Decode(); } catch(System.IO.InvalidDataException) { rejected=true; }
+                Check(rejected,"Malformed picture accepted");
+            }
+            Bad(new byte[9]); Bad(PictureFixture(8,true,new byte[]{0xf8,1})); Bad(PictureFixture(8,true,new byte[]{0xfa,1}));
+            var truncated=PictureFixture(16,false,new byte[16]);Bad(truncated.Take(truncated.Length-4).ToArray());
+            var huge=PictureFixture(8,false,new byte[8]); huge[24]=0x7f; huge[25]=0xff; Bad(huge);
+        });
+        Test("terminal page and branch order remains sequential across edits and serialization", () => {
+            var doc=new TerminalDocument {Dirty=true};
+            foreach(var branch in new[]{TerminalPageType.Failure,TerminalPageType.Success,TerminalPageType.Unfinished}) {
+                doc.Pages.Add(new TerminalPage {Type=branch});
+                foreach(int id in new[]{101,102,103}) {var page=new TerminalPage {Type=TerminalPageType.Picture,Permutation=(short)id};page.SetText(branch+" "+id);doc.Pages.Add(page);}
+                doc.Pages.Add(new TerminalPage {Type=TerminalPageType.End});
+            }
+            var read=TerminalCodec.Read(TerminalCodec.Write(new[]{doc})).Single();
+            Check(read.Pages.Select(p=>p.Type).SequenceEqual(doc.Pages.Select(p=>p.Type)),"Branches sorted or reversed");
+            Check(read.Pages.Where(p=>p.Type==TerminalPageType.Picture).Select(p=>p.Permutation).SequenceEqual(new short[]{101,102,103,101,102,103,101,102,103}),"Pages reversed");
+            var moved=read.Pages[2];read.Pages.RemoveAt(2);read.Pages.Insert(1,moved);read.Dirty=true;
+            var reordered=TerminalCodec.Read(TerminalCodec.Write(new[]{read})).Single();
+            Check(reordered.Pages[1].Permutation==102 && reordered.Pages[2].Permutation==101 && reordered.Pages[3].Permutation==103,"Move earlier was reversed");
+        });
+        Test("imported pictures encode engine RGB32 PICT without color or aspect loss", () => {
+            foreach(int width in new[]{1,3,9,307,622}) {
+                var image=new Image(width,4);for(int i=0;i<image.Data.Length;++i)image.Data[i]=(byte)(i*43);
+                byte[] bytes=TerminalPictureImports.Encode(image);
+                Check(bytes[10]==0 && bytes[11]==0x11 && bytes[12]==2 && bytes[13]==255,"Wrong PICT engine version");
+                var decoded=new TerminalPicture {Data=bytes}.Decode();
+                Check(decoded.Width==width && decoded.Height==4 && decoded.Data.SequenceEqual(image.Data),"Imported image distorted or colors lost");
+            }
+            int id=TerminalPictureImports.NextId(new[]{1000,11001,21002,11003});
+            Check(id==1004,"Picture ID/variant collision");
+        });
+        Test("imported pictures round trip through map save load and undo without stale resources", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var ed=Editor(level);
+            var image=new Image(3,2);image.Data[0]=255;byte[] picture=TerminalPictureImports.Encode(image);
+            var source=new MapFile();var existing=new Wadfile.DirectoryEntry();existing.Chunks[Wadfile.Chunk("PICT")]=picture;source.Directory[1400]=existing;
+            ed.SetUndo("Import terminal picture");level.Chunks[TerminalPictureImports.Tag]=TerminalPictureImports.Write(new System.Collections.Generic.Dictionary<int,byte[]>{{1000,picture}});ed.CommitHistory(true);
+            var exported=TerminalPictureImports.Export(level.Save(),source);
+            Check(TerminalPictureImports.LevelCount(exported)==1 && TerminalPicture.FromWad(exported,1000).Data.SequenceEqual(picture),"Imported picture not exported as an engine resource");
+            string path=System.IO.Path.GetTempFileName();
+            try {
+                exported.Save(path);var loaded=new MapFile();loaded.Load(path);
+                Check(loaded.Version==4,"Engine requires WAD version 4 for multiple entries; version 3 aborts");
+                Check(TerminalPictureImports.LevelCount(loaded)==1 && loaded.Overlays[1000].EntryPointFlags==0,"Picture became a playable level");
+                Check(TerminalPicture.FromFile(path,1000).Decode().Data.SequenceEqual(image.Data),"Picture absent from saved map");
+                Check(TerminalPictureImports.Read(loaded.Directory[0])[1000].SequenceEqual(picture),"Editable image state lost on reload");
+                Check(TerminalPicture.FromWad(loaded,1400).Data.SequenceEqual(picture),"Existing resource replaced");
+                long savedLength=new System.IO.FileInfo(path).Length;
+                ed.Undo();var undone=TerminalPictureImports.Export(ed.Level.Save(),loaded);
+                Check(!undone.Directory.ContainsKey(1000) && undone.Directory.ContainsKey(1400),"Undo left a stale imported resource or removed existing resource");
+                undone.Save(path); Check(new System.IO.FileInfo(path).Length < savedLength,"Smaller map retained stale trailing resource bytes");
+                var reloaded=new MapFile();reloaded.Load(path);Check(TerminalPicture.FromWad(reloaded,1000)==null,"Undone picture survived disk save");
+                ed.Redo();var redone=TerminalPictureImports.Export(ed.Level.Save(),undone);
+                Check(TerminalPicture.FromWad(redone,1000).Decode().Width==3,"Redo lost imported picture");
+                var returned=new Wadfile.DirectoryEntry();TerminalPictureImports.RestoreAfterVisualMode(redone.Directory[0],returned);
+                Check(returned.Chunks[TerminalPictureImports.Tag].SequenceEqual(redone.Directory[0].Chunks[TerminalPictureImports.Tag]),"Visual mode lost editable image resources");
+            } finally {System.IO.File.Delete(path);}
+        });
+        Test("imported picture archives reject invalid IDs lengths and collisions", () => {
+            byte[] picture=TerminalPictureImports.Encode(new Image(1,1));
+            byte[] bytes=TerminalPictureImports.Write(new System.Collections.Generic.Dictionary<int,byte[]>{{1000,picture}});
+            foreach(var invalid in new[]{bytes.Take(bytes.Length-1).ToArray(),bytes.Concat(new byte[]{1}).ToArray(),new byte[4]}) {
+                bool bad=false;try{TerminalPictureImports.Read(invalid);}catch(System.IO.InvalidDataException){bad=true;}Check(bad,"Malformed imported picture archive accepted");
+            }
+            var level=new Level();Box(level,0,0,1000,1000);level.Chunks[TerminalPictureImports.Tag]=bytes;
+            var source=new MapFile();source.Directory[1000]=new Wadfile.DirectoryEntry();
+            bool rejected=false;try{TerminalPictureImports.Export(level.Save(),source);}catch(System.IO.InvalidDataException){rejected=true;}Check(rejected,"Resource collision silently replaced existing data");
+        });
+        Test("engine WAD versions use 2 or 4 and resaving repairs accidental version 3", () => {
+            var level=new Level();Box(level,0,0,1000,1000);
+            var single=TerminalPictureImports.Export(level.Save(),new MapFile());
+            string path=System.IO.Path.GetTempFileName();
+            try {
+                single.Save(path);var loaded=new MapFile();loaded.Load(path);Check(loaded.Version==2,"Single-entry WAD version must remain 2");
+                byte[] picture=TerminalPictureImports.Encode(new Image(2,2));
+                level.Chunks[TerminalPictureImports.Tag]=TerminalPictureImports.Write(new System.Collections.Generic.Dictionary<int,byte[]>{{1000,picture}});
+                var multi=TerminalPictureImports.Export(level.Save(),single);multi.Save(path);
+                byte[] bytes=System.IO.File.ReadAllBytes(path);Check(bytes[0]==0 && bytes[1]==4,"Invalid engine WAD version");
+                bytes[1]=3;System.IO.File.WriteAllBytes(path,bytes);var legacy=new MapFile();legacy.Load(path);
+                byte[] before=legacy.Directory[0].Chunks[TerminalPictureImports.Tag];
+                legacy.Save(path);var repaired=new MapFile();repaired.Load(path);
+                Check(repaired.Version==4 && repaired.Directory[0].Chunks[TerminalPictureImports.Tag].SequenceEqual(before),"Resave did not repair version while retaining image archive");
+                Check(TerminalPicture.FromFile(path,1000).Data.SequenceEqual(picture),"Repair changed engine picture bytes");
+            } finally {System.IO.File.Delete(path);}
+        });
+        Test("simple terminal gets an engine entry branch without reversing display pages", () => {
+            var document=new TerminalDocument();
+            foreach(var type in new[]{TerminalPageType.Logon,TerminalPageType.Picture,TerminalPageType.Logoff}) {
+                var page=new TerminalPage {Type=type,Permutation=1000};page.SetText(type.ToString());document.Pages.Add(page);
+            }
+            var originalPages=document.Pages.ToArray();
+            Check(document.EnsureEntryBranch() && document.Dirty,"Missing terminal entry branch not repaired");
+            Check(document.Pages.Select(p=>p.Type).SequenceEqual(new[]{TerminalPageType.Unfinished,TerminalPageType.Logon,TerminalPageType.Picture,TerminalPageType.Logoff,TerminalPageType.End}),"Wrong playable terminal sequence");
+            Check(document.Pages.Skip(1).Take(3).SequenceEqual(originalPages),"Display pages replaced or reversed");
+            Check(!document.EnsureEntryBranch() && document.Pages.Count==5,"Repeated Apply duplicates branches");
+            var loaded=TerminalCodec.Read(TerminalCodec.Write(new[]{document})).Single();
+            Check(loaded.Pages[0].Type==TerminalPageType.Unfinished && loaded.Pages[1].Permutation==1000 && loaded.Pages[2].Text=="Picture","Playable branch failed serialization");
+            // An already saved unbranched terminal is repaired by Apply, too.
+            var old=new TerminalDocument {Dirty=true};old.Pages.Add(originalPages[1]);old.Pages.Add(new TerminalPage {Type=TerminalPageType.End});
+            old=TerminalCodec.Read(TerminalCodec.Write(new[]{old})).Single();
+            Check(!old.Dirty && old.EnsureEntryBranch() && old.Pages.Count==3,"Existing terminal needs a text edit to repair or End was duplicated");
+        });
+        Test("terminal entry repair preserves explicit branches and Marathon 1 fallback", () => {
+            foreach(var type in new[]{TerminalPageType.Unfinished,TerminalPageType.Success,TerminalPageType.Failure}) {
+                var document=new TerminalDocument();document.Pages.Add(new TerminalPage {Type=type});document.Pages.Add(new TerminalPage {Type=TerminalPageType.Picture});
+                Check(!document.EnsureEntryBranch() && !document.Dirty && document.Pages.Count==2,"Explicit completion branch changed");
+            }
+            var m1=new TerminalDocument();m1.Pages.Add(new TerminalPage {Type=TerminalPageType.Logon,Flags=0x100});
+            Check(!m1.EnsureEntryBranch() && !m1.Dirty && m1.Pages.Count==1,"Marathon 1 fallback terminal changed");
+            Check(!new TerminalDocument().EnsureEntryBranch(),"Empty terminal gained unused markers");
+        });
+        Test("terminal engine headers pages styles and MacRoman text", () => {
+            var document = TerminalDocument.Create(); document.Pages[1].SetText("Åäö\nHello");
+            document.Pages[1].MaximumLines = 2;
+            document.Pages[1].Styles[1] = new TerminalStyle(7,4);
+            document.Pages.Insert(2,new TerminalPage { Type = TerminalPageType.InterlevelTeleport, Permutation = 3 });
+            byte[] bytes = TerminalCodec.Write(new[] {document});
+            Check((bytes[0] << 8 | bytes[1]) == bytes.Length && bytes[6] == 0 && bytes[7] == 4, "Wrong terminal engine header");
+            var read = TerminalCodec.Read(bytes).Single();
+            Check(read.Pages[1].Text == "Åäö\nHello" && read.Pages[1].Styles[1].Face == 7 && read.Pages[1].Styles[1].Color == 4, "Terminal text/format lost");
+            Check(read.Pages[2].Type == TerminalPageType.InterlevelTeleport && read.Pages[2].Permutation == 3 && read.Pages[2].MaximumLines == 1, "Action ID or line count wrong");
+            Check(TerminalCodec.Write(new[] {read}).SequenceEqual(bytes), "Untouched terminal changed");
+            read.Dirty = true;
+            Check(TerminalCodec.Read(TerminalCodec.Write(new[] {read}))[0].Pages[1].Text == "Åäö\nHello", "Terminal recompilation lost text");
+        });
+        Test("terminal encoded text exact preservation and mixed document edits", () => {
+            foreach (int length in Enumerable.Range(0,9)) {
+                var doc = TerminalDocument.Create(); doc.Flags = 1;
+                doc.Pages[1].SetText(new string('x',length));
+                byte[] bytes = TerminalCodec.Write(new[] {doc});
+                var read = TerminalCodec.Read(bytes).Single();
+                Check(read.Pages[1].Text == new string('x',length), "Terminal encoding tail broken");
+                Check(TerminalCodec.Write(new[] {read}).SequenceEqual(bytes), "Encoded terminal bytes changed");
+                var added = TerminalDocument.Create();
+                byte[] combined = TerminalCodec.Write(new[] {read,added});
+                Check(combined.Take(bytes.Length).SequenceEqual(bytes) && TerminalCodec.Read(combined).Count == 2, "Adding terminal changed existing IDs/data");
+            }
+        });
+        Test("terminal malformed chunks and encoding limits rejected", () => {
+            byte[] bytes = TerminalCodec.Write(new[] {TerminalDocument.Create()});
+            foreach (int length in new[] {1,9,10,bytes.Length-1}) {
+                bool rejected = false;
+                try { TerminalCodec.Read(bytes.Take(length).ToArray()); } catch (System.IO.InvalidDataException) { rejected = true; }
+                Check(rejected, "Truncated terminal accepted");
+            }
+            var doc = TerminalDocument.Create(); doc.Pages[1].SetText(new string('x',32767));
+            bool tooLong = false;
+            try { TerminalCodec.Write(new[] {doc}); } catch (ArgumentException) { tooLong = true; }
+            Check(tooLong, "Terminal text offset overflow accepted");
+            doc.Pages[1].SetText("🙂"); bool unsupported = false;
+            try { TerminalCodec.Write(new[] {doc}); } catch (System.Text.EncoderFallbackException) { unsupported = true; }
+            Check(unsupported, "Unsupported characters silently lost");
+        });
+        Test("terminals survive disk save load undo redo and Lua coexistence", () => {
+            var level = new Level(); Box(level,0,0,100,100); var editor = Editor(level);
+            level.Chunks[EmbeddedLua.Tag] = EmbeddedLua.Write(new[] {new EmbeddedLuaScript {Name = "test", Text = "return 1"}});
+            byte[] lua = (byte[])level.Chunks[EmbeddedLua.Tag].Clone();
+            editor.SetUndo("Edit level terminals");
+            level.Chunks[TerminalCodec.Tag] = TerminalCodec.Write(new[] {TerminalDocument.Create()}); editor.CommitHistory(true);
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid()+".sceA");
+            try {
+                var map = new MapFile(); map.Directory[0] = level.Save(); map.Save(path);
+                var reopened = new MapFile(); reopened.Load(path); var loaded = new Level(); loaded.Load(reopened.Directory[0]);
+                Check(TerminalCodec.Read(loaded.Chunks[TerminalCodec.Tag]).Count == 1 && loaded.Chunks[EmbeddedLua.Tag].SequenceEqual(lua), "Saved terminals or Lua lost");
+            } finally { System.IO.File.Delete(path); }
+            editor.Undo(); Check(!level.Chunks.ContainsKey(TerminalCodec.Tag), "Terminal undo failed");
+            editor.Redo(); Check(level.Chunks.ContainsKey(TerminalCodec.Tag), "Terminal redo failed");
+            var original = level.Save().Clone(); var visual = EmbeddedLua.ForVisualMode(original,null);
+            Check(visual.Chunks[TerminalCodec.Tag].SequenceEqual(original.Chunks[TerminalCodec.Tag]), "Visual-mode preparation changed terminals");
+        });
         Test("embedded Lua engine layout and UTF8 round trip", () => {
             var scripts = new[] {
                 new EmbeddedLuaScript { Name = "Första", Flags = 0x12345678, Text = "-- snö 雪\nTriggers = {}\n" },

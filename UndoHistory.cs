@@ -91,6 +91,7 @@ namespace Weland
 
         void PrepareHistoryNavigation()
         {
+            if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
             ClearHover(); CancelBox(); CancelSelectionBox(); CancelCircle(); CancelMoveTool();
             CancelRotateTool();
             CancelScaleTool();

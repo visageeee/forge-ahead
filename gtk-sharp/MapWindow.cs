@@ -692,6 +692,10 @@ namespace Weland
                 EditorModifiers modifiers = Modifiers(args.Event.State);
                 if (args.Event.Button == 3) modifiers |= EditorModifiers.RightClick;
                 editor.ButtonRelease(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y), modifiers);
+                if (args.Event.Button == 1 && editor.Tool == Tool.Line && !string.IsNullOrEmpty(editor.LineToolError)) {
+                    using var error = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Info, ButtonsType.Close, editor.LineToolError);
+                    error.Run();
+                }
                 Redraw();
             }
 
@@ -1068,7 +1072,7 @@ namespace Weland
         void BuildLevelMenu()
         {
             Menu menu = new Menu();
-            if (mapfile.Directory.Count > 1)
+            if (TerminalPictureImports.LevelCount(mapfile) > 1)
             {
                 // assume it has overlays
                 foreach (var kvp in mapfile.Directory)
@@ -1139,7 +1143,7 @@ namespace Weland
                 MapFile w = new MapFile();
                 w.Load(filename);
                 mapfile = w;
-                if (mapfile.Directory.Count > 1)
+                if (TerminalPictureImports.LevelCount(mapfile) > 1)
                 {
                     Filename = "";
                 }
@@ -1212,7 +1216,7 @@ namespace Weland
         {
             bool saved = false;
             string message;
-            if (mapfile.Directory.Count > 1)
+            if (TerminalPictureImports.LevelCount(mapfile) > 1)
             {
                 message = "Export level";
             }
@@ -1228,11 +1232,11 @@ namespace Weland
             {
                 if (d.Run() == (int)ResponseType.Accept)
                 {
-                    mapfile = new MapFile();
                     Level.AssurePlayerStart();
                     Redraw();
-                    mapfile.Directory[0] = Level.Save();
-                    mapfile.Save(d.Filename);
+                    var output = TerminalPictureImports.Export(Level.Save(),mapfile);
+                    output.Save(d.Filename);
+                    mapfile = output;
                     Filename = d.Filename;
 
                     Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));
@@ -1271,8 +1275,9 @@ namespace Weland
                 {
                     Level.AssurePlayerStart();
                     Redraw();
-                    mapfile.Directory[0] = Level.Save();
-                    mapfile.Save(Filename);
+                    var output = TerminalPictureImports.Export(Level.Save(),mapfile);
+                    output.Save(Filename);
+                    mapfile = output;
                     editor.Changed = false;
                     success = true;
                 }
@@ -2583,6 +2588,7 @@ namespace Weland
                 toEditor.Directory[0] = EmbeddedLua.ForVisualMode(originalLevel, script);
             }
 
+            toEditor = TerminalPictureImports.Export(toEditor.Directory[0],mapfile);
             toEditor.Save(toEditorName);
 
             Process p = new Process();
@@ -2621,6 +2627,7 @@ namespace Weland
                         MapFile fromEditor = new MapFile();
                         fromEditor.Load(fromEditorName);
                         EmbeddedLua.RestoreAfterVisualMode(originalLevel, fromEditor.Directory[0]);
+                        TerminalPictureImports.RestoreAfterVisualMode(originalLevel, fromEditor.Directory[0]);
                         var returnedLevel = new Level();
                         returnedLevel.Load(fromEditor.Directory[0]);
                         Level = returnedLevel;

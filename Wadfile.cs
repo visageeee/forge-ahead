@@ -9,7 +9,8 @@ namespace Weland
         PreEntryPoint,
         HasDirectoryEntry,
         SupportsOverlays,
-        HasInfinityStuff
+        // Engine format numbers skip 3 (wad.h: WADFILE_HAS_INFINITY_STUFF).
+        HasInfinityStuff = 4
     }
 
     enum WadfileDataVersion
@@ -348,6 +349,9 @@ namespace Weland
                     kvp.Value.SaveEntry(writer);
                     SaveApplicationSpecificDirectoryData(writer, kvp.Value.Index);
                 }
+
+                // A rewritten map may be smaller after resources are removed or undone.
+                fs.SetLength(fs.Position);
 
                 // fix the checksum!
                 checksum = crcStream.GetCRC();
