@@ -55,9 +55,10 @@ def main(rid):
         copied[source] = dest
         shutil.copy2(source, dest)
         dest.chmod(0o755)
-        # Strip bottle signatures before rewriting load commands.
-        subprocess.run(['codesign', '--remove-signature', str(dest)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        # Keep the signature region while rewriting load commands. Removing it
+        # first can leave a __LINKEDIT layout Apple's install_name_tool rejects.
+        # Relocation invalidates the old signature; the final signing pass
+        # replaces it using codesign --force after every library is rewritten.
         paths = []
         lines = run('otool', '-l', str(source)).splitlines()
         for i, line in enumerate(lines):
@@ -81,6 +82,10 @@ def main(rid):
                 resolved = Path(dependency)
             else:
                 raise RuntimeError(f'Unsupported dependency {dependency} in {source}')
+            # otool -L also reports LC_ID_DYLIB. It is handled by -id below,
+            # rather than treating the library's own identity as a dependency.
+            if resolved.resolve() == source:
+                continue
             target = copy_binary(resolved)
             changes += ['-change', dependency, '@loader_path/' + target.name]
         subprocess.run(['install_name_tool', '-id', '@loader_path/' + dest.name, *changes, str(dest)], check=True)
