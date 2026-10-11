@@ -349,13 +349,15 @@ namespace Weland
 
                 if (Editor != null && Editor.DrawingCircle)
                 {
-                    var points = Editor.CircleVertices;
                     Drawer.Color color = Editor.CircleMessage == null ? selectedLineColor : invalidPolygonColor;
-                    for (int i = 0; i < points.Count; ++i)
-                    {
-                        drawer.DrawLine(color, Transform.ToScreenPoint(points[i]), Transform.ToScreenPoint(points[(i + 1) % points.Count]));
-                        DrawFatPoint(color, points[i]);
-                    }
+                    var rings = Editor.DrawingCircleTessellation ? Editor.CircleTiles
+                        : new System.Collections.Generic.List<System.Collections.Generic.List<Point>> { Editor.CircleVertices };
+                    foreach (var points in rings)
+                        for (int i = 0; i < points.Count; ++i)
+                        {
+                            drawer.DrawLine(color, Transform.ToScreenPoint(points[i]), Transform.ToScreenPoint(points[(i + 1) % points.Count]));
+                            DrawFatPoint(color, points[i]);
+                        }
                 }
 
                 if (Editor != null && Editor.DrawingSelectionBox)

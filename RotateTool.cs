@@ -79,7 +79,7 @@ namespace Weland
             var notes = rotationNotes.ToDictionary(pair => pair.Key, pair => Rotate(pair.Value));
             if (!inRange || points.All(pair => Level.Endpoints[pair.Key].Equals(pair.Value))) return;
             if (!undoSet) { SetUndo("Rotate selection"); undoSet = true; }
-            foreach (var pair in points) MovePoint(pair.Key, pair.Value.X, pair.Value.Y);
+            MoveTransformPoints(points);
             foreach (var pair in objects)
             {
                 pair.Key.X = pair.Value.X; pair.Key.Y = pair.Value.Y;

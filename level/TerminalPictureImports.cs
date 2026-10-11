@@ -55,11 +55,18 @@ namespace Weland
         public static MapFile Export(Wadfile.DirectoryEntry level, Wadfile source)
         {
             var output = new MapFile(); output.Directory[0] = level.Clone();
+            var imported = Read(level);
+            var referenced = new HashSet<int>();
+            if (level.Chunks.TryGetValue(TerminalCodec.Tag, out var terminalBytes))
+                foreach (var page in TerminalCodec.Read(terminalBytes).SelectMany(d => d.Pages))
+                    if (page.Type == TerminalPageType.Picture || page.Type == TerminalPageType.Logon || page.Type == TerminalPageType.Logoff)
+                        referenced.Add(page.Permutation);
             foreach (var pair in source.Directory) {
-                if (!pair.Value.Chunks.ContainsKey(MapInfo.Tag) && !pair.Value.Chunks.ContainsKey(ManagedTag) && pair.Key != 0)
+                if (!pair.Value.Chunks.ContainsKey(MapInfo.Tag) && pair.Key != 0 &&
+                    (!pair.Value.Chunks.ContainsKey(ManagedTag) || (referenced.Contains(pair.Key) && !imported.ContainsKey(pair.Key))))
                     output.Directory[pair.Key] = pair.Value.Clone();
             }
-            foreach (var pair in Read(level)) {
+            foreach (var pair in imported) {
                 if (output.Directory.ContainsKey(pair.Key)) throw new InvalidDataException("Imported picture ID conflicts with an existing resource: " + pair.Key);
                 var entry = new Wadfile.DirectoryEntry(); entry.Chunks[Wadfile.Chunk("PICT")] = pair.Value;
                 entry.Chunks[ManagedTag] = new byte[] {1}; output.Directory[pair.Key] = entry;
@@ -75,6 +82,66 @@ namespace Weland
             }
             return output;
         }
+        public static IEnumerable<int> UsedIds(Wadfile source)
+        {
+            foreach (int id in source.Directory.Keys) yield return id;
+            foreach (var entry in source.Directory.Values.Where(e => e.Chunks.ContainsKey(MapInfo.Tag)))
+            {
+                foreach (int id in Read(entry).Keys) yield return id;
+                if (entry.Chunks.TryGetValue(TerminalCodec.Tag, out var bytes))
+                    foreach (var page in TerminalCodec.Read(bytes).SelectMany(d => d.Pages))
+                        if (page.Type == TerminalPageType.Picture || page.Type == TerminalPageType.Logon || page.Type == TerminalPageType.Logoff)
+                            yield return page.Permutation;
+            }
+        }
+
+        public static MapFile ExportScenario(Wadfile.DirectoryEntry edited, int index, MapFile source)
+        {
+            var output = ScenarioMaps.Update(source, index, edited);
+            // Rebuild managed resources from every map, including staged edits.
+            var managed = output.Directory.Where(p => !p.Value.Chunks.ContainsKey(MapInfo.Tag) &&
+                p.Value.Chunks.ContainsKey(ManagedTag)).ToDictionary(p => p.Key, p => p.Value);
+            foreach (int key in managed.Keys)
+            { output.Directory.Remove(key); output.Overlays.Remove(key); }
+            var pictures = new SortedDictionary<int, byte[]>();
+            foreach (var entry in output.Directory.Values.Where(e => e.Chunks.ContainsKey(MapInfo.Tag)))
+                foreach (var picture in Read(entry))
+                {
+                    if (pictures.TryGetValue(picture.Key, out var previous) && !previous.SequenceEqual(picture.Value))
+                        throw new InvalidDataException("Different maps use conflicting imported picture ID " + picture.Key + ".");
+                    pictures[picture.Key] = picture.Value;
+                }
+            foreach (var picture in pictures)
+            {
+                if (output.Directory.ContainsKey(picture.Key))
+                    throw new InvalidDataException("Imported picture ID conflicts with a scenario map or resource: " + picture.Key);
+                var entry = new Wadfile.DirectoryEntry(); entry.Chunks[Wadfile.Chunk("PICT")] = (byte[])picture.Value.Clone();
+                entry.Chunks[ManagedTag] = new byte[] {1}; output.Directory[picture.Key] = entry;
+                output.Overlays[picture.Key] = new MapFile.Overlay { LevelName = "" };
+            }
+            var referenced = new HashSet<int>();
+            bool preserveUnknown = false;
+            foreach (var entry in output.Directory.Values.Where(e => e.Chunks.ContainsKey(MapInfo.Tag)))
+                if (entry.Chunks.TryGetValue(TerminalCodec.Tag, out var bytes))
+                    try
+                    {
+                        foreach (var page in TerminalCodec.Read(bytes).SelectMany(d => d.Pages))
+                            if (page.Type == TerminalPageType.Picture || page.Type == TerminalPageType.Logon || page.Type == TerminalPageType.Logoff)
+                                referenced.Add(page.Permutation);
+                    }
+                    catch (InvalidDataException) { preserveUnknown = true; }
+            // An archive can be removed from its original map while another map
+            // still refers to its picture. Retain that scenario-wide resource.
+            foreach (var entry in managed)
+                if (!output.Directory.ContainsKey(entry.Key) && (preserveUnknown || referenced.Contains(entry.Key)))
+                {
+                    output.Directory[entry.Key] = entry.Value.Clone();
+                    output.Overlays[entry.Key] = new MapFile.Overlay { LevelName = "" };
+                }
+            if (output.Directory.Count > short.MaxValue) throw new InvalidDataException("Too many maps and resources in this scenario.");
+            return output;
+        }
+
         public static void RestoreAfterVisualMode(Wadfile.DirectoryEntry original, Wadfile.DirectoryEntry returned)
         {
             if (original.Chunks.TryGetValue(Tag,out var bytes)) returned.Chunks[Tag] = (byte[])bytes.Clone();

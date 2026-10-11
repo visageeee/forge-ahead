@@ -226,7 +226,9 @@ namespace Weland
             if (!lockY && index != -1 && Level.Endpoints[index].X == BoxStart.X)
                 end.Y = Level.Endpoints[index].Y;
             BoxEnd = end;
-            Level.CanCreateBox(BoxStart, BoxEnd, out string reason);
+            string reason;
+            if (BoxFilled) Level.CanCreateBox(BoxStart, BoxEnd, out reason);
+            else Level.PlanShapeOutline(new List<List<Point>> { OutlineBoxCorners() }, out _, out _, out _, out reason);
             BoxMessage = reason;
             AddDirty(BoxEnd);
         }
@@ -236,6 +238,12 @@ namespace Weland
             if (!DrawingBox) return;
             UpdateBox(X, Y);
             DrawingBox = false;
+            if (!BoxFilled)
+            {
+                FinishShapeOutline(new List<List<Point>> { OutlineBoxCorners() }, "Draw box outline", out string outlineReason);
+                BoxMessage = outlineReason;
+                return;
+            }
             if (!Level.CanCreateBox(BoxStart, BoxEnd, out string reason))
             {
                 BoxMessage = reason;
@@ -259,7 +267,11 @@ namespace Weland
 
         public void LoadSettings()
         {
+            BoxFilled = Weland.Settings.GetSetting("Tools/BoxFilled", true);
+            CircleFilled = Weland.Settings.GetSetting("Tools/CircleFilled", true);
             CircleSides = Weland.Settings.GetSetting("Tools/CircleSides", 8);
+            CircleTessellationEnabled = Weland.Settings.GetSetting("Tools/CircleTessellation", false);
+            CircleTileSize = Weland.Settings.GetSetting("Tools/CircleTileSize", 1024);
             DefaultSnapDistance = Weland.Settings.GetSetting("Distance/Select/Default", 4);
             ObjectSnapDistance = Weland.Settings.GetSetting("Distance/Select/Object", 8);
             InertiaDistance = Weland.Settings.GetSetting("Distance/Inertia/Default", 8);
@@ -268,7 +280,11 @@ namespace Weland
 
         public void SaveSettings()
         {
+            Weland.Settings.PutSetting("Tools/BoxFilled", BoxFilled);
+            Weland.Settings.PutSetting("Tools/CircleFilled", CircleFilled);
             Weland.Settings.PutSetting("Tools/CircleSides", CircleSides);
+            Weland.Settings.PutSetting("Tools/CircleTessellation", CircleTessellationEnabled);
+            Weland.Settings.PutSetting("Tools/CircleTileSize", CircleTileSize);
             Weland.Settings.PutSetting("Distance/Select/Default", DefaultSnapDistance);
             Weland.Settings.PutSetting("Distance/Select/Object", ObjectSnapDistance);
             Weland.Settings.PutSetting("Distance/Inertia/Default", InertiaDistance);
@@ -740,16 +756,27 @@ namespace Weland
             }
 
             // update attached polygon concavity
-            List<short> polygons = Level.FindEndpointPolygons(index);
-
-            // dirty every attached polygon(!!?)
-            foreach (short i in polygons)
+            // The adjacency cache avoids scanning the whole map per vertex.
+            foreach (Polygon polygon in Level.EndpointPolygons[index])
             {
-                Polygon polygon = Level.Polygons[i];
                 Level.UpdatePolygonConcavity(polygon);
                 DirtyPolygon(polygon);
             }
 
+        }
+
+        void MoveTransformPoints(Dictionary<short, Point> points)
+        {
+            // Scale and Rotate redraw the map as a whole. Apply the complete
+            // frame before updating each affected polygon, rather than updating
+            // it repeatedly with intermediate vertex positions.
+            var polygons = new HashSet<Polygon>();
+            foreach (var pair in points)
+            {
+                Level.Endpoints[pair.Key] = pair.Value;
+                polygons.UnionWith(Level.EndpointPolygons[pair.Key]);
+            }
+            foreach (Polygon polygon in polygons) Level.UpdatePolygonConcavity(polygon);
         }
 
         void TranslateObject(MapObject obj, int X, int Y)
@@ -1341,12 +1368,17 @@ namespace Weland
             }
         }
 
+        bool IsPolygonPaintTool => Tool == Tool.FloorHeight || Tool == Tool.CeilingHeight ||
+            Tool == Tool.PolygonType || Tool == Tool.FloorLight || Tool == Tool.CeilingLight ||
+            Tool == Tool.MediaLight || Tool == Tool.Media || Tool == Tool.AmbientSound ||
+            Tool == Tool.RandomSound || Tool == Tool.FloorTexture || Tool == Tool.CeilingTexture;
+
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
             CommitHistory();
             ClearHover();
             historyGesture = true;
-            if (RightClick(mods))
+            if (RightClick(mods) && !IsPolygonPaintTool)
             {
                 downX = lastX = X;
                 downY = lastY = Y;

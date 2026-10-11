@@ -30,6 +30,8 @@ namespace Weland
         }
 
         MapFile mapfile = new MapFile();
+        int currentLevelIndex;
+        bool scenarioChanged;
         Editor editor = new Editor();
         Grid grid = new Grid();
         Selection selection = new Selection();
@@ -312,7 +314,9 @@ namespace Weland
 
             if (editor.Tool == Tool.Circle && (editor.DrawingCircle || editor.CircleMessage != null))
             {
-                statusbar.Push(id, editor.CircleMessage ?? String.Format("Circle: {0} sides", editor.CircleSides));
+                statusbar.Push(id, editor.CircleMessage ?? (editor.DrawingCircleTessellation
+                    ? String.Format("Tessellation: {0} tiles", editor.CircleTiles.Count)
+                    : String.Format("Circle: {0} sides", editor.CircleSides)));
             }
             else if (selection.HasMultipleGeometry || editor.DrawingSelectionBox)
             {
@@ -624,6 +628,7 @@ namespace Weland
                 if (ev.Button == 3)
                 {
                     editor.ButtonPress(X, Y, Modifiers(ev.State) | EditorModifiers.RightClick);
+                    UpdatePaintPalette();
                     Redraw();
                 }
                 else if (ev.Button == 2 || editor.Tool == Tool.Pan)
@@ -685,6 +690,28 @@ namespace Weland
             args.RetVal = true;
         }
 
+        void UpdatePaintPalette()
+        {
+            if (editor.Tool == Tool.FloorHeight || editor.Tool == Tool.CeilingHeight || editor.Tool == Tool.PolygonType || editor.Tool == Tool.FloorLight || editor.Tool == Tool.CeilingLight || editor.Tool == Tool.MediaLight || editor.Tool == Tool.Media || editor.Tool == Tool.AmbientSound || editor.Tool == Tool.RandomSound)
+            {
+                // update the paint mode button
+                int i = paintIndexes.IndexOfKey(editor.PaintIndex);
+                if (i != -1)
+                {
+                    ColorRadioButton crb = (ColorRadioButton)paletteButtonbox.Children[i];
+                    if (!crb.Active)
+                    {
+                        crb.Active = true;
+                    }
+                }
+            }
+            else if (editor.Tool == Tool.FloorTexture || editor.Tool == Tool.CeilingTexture)
+            {
+                UpdateTexturePalette(false);
+            }
+
+        }
+
         internal void OnButtonReleased(object obj, ButtonReleaseEventArgs args)
         {
             if (args.Event.Button == 1 || args.Event.Button == 3)
@@ -699,27 +726,9 @@ namespace Weland
                 Redraw();
             }
 
-            if (editor.Tool == Tool.FloorHeight || editor.Tool == Tool.CeilingHeight || editor.Tool == Tool.PolygonType || editor.Tool == Tool.FloorLight || editor.Tool == Tool.CeilingLight || editor.Tool == Tool.MediaLight || editor.Tool == Tool.Media || editor.Tool == Tool.AmbientSound || editor.Tool == Tool.RandomSound)
-            {
-                // update the paint mode button
-                int i = paintIndexes.IndexOfKey(editor.PaintIndex);
-                if (i != -1)
-                {
-                    ColorRadioButton crb = (ColorRadioButton)paletteButtonbox.Children[i];
-                    if (!crb.Active)
-                    {
-                        crb.Active = true;
-                    }
-                }
-            }
-            else if (editor.Tool == Tool.Annotation && editor.EditAnnotation)
-            {
+            UpdatePaintPalette();
+            if (editor.Tool == Tool.Annotation && editor.EditAnnotation)
                 EditAnnotation();
-            }
-            else if (editor.Tool == Tool.FloorTexture || editor.Tool == Tool.CeilingTexture)
-            {
-                UpdateTexturePalette(false);
-            }
 
             UpdateInspector();
             UpdateStatusBar();
@@ -742,6 +751,7 @@ namespace Weland
             {
                 editor.Motion(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y),
                     Modifiers(args.Event.State) | EditorModifiers.RightClick);
+                UpdatePaintPalette();
                 RedrawDirty();
                 UpdateStatusBar();
                 args.RetVal = true;
@@ -1043,7 +1053,7 @@ namespace Weland
 
         public bool CheckSave()
         {
-            if (editor.Changed)
+            if (editor.Changed || scenarioChanged)
             {
                 using var dialog = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Warning, ButtonsType.None, "Do you wish to save changes?");
                 dialog.AddButton(Stock.Discard, ResponseType.No);
@@ -1072,24 +1082,21 @@ namespace Weland
         void BuildLevelMenu()
         {
             Menu menu = new Menu();
-            if (TerminalPictureImports.LevelCount(mapfile) > 1)
+            var indexes = ScenarioMaps.Indexes(mapfile);
+            if (indexes.Length > 1)
             {
-                // assume it has overlays
-                foreach (var kvp in mapfile.Directory)
+                foreach (int index in indexes)
                 {
-                    if (kvp.Value.Chunks.ContainsKey(MapInfo.Tag))
-                    {
-                        MenuItem item = new MenuItem(mapfile.Overlays[kvp.Value.Index].LevelName);
-                        int levelNumber = kvp.Key;
-                        item.Activated += delegate (object obj, EventArgs args) { SelectLevel(levelNumber); };
-                        menu.Append(item);
-                    }
+                    string name = index == currentLevelIndex ? Level.Name : ScenarioMaps.Name(mapfile, index);
+                    var item = new CheckMenuItem(String.Format("{0}: {1}", index, name)) { Active = index == currentLevelIndex };
+                    int levelNumber = index;
+                    item.Activated += delegate { SelectLevel(levelNumber); };
+                    menu.Append(item);
                 }
             }
             else
             {
-                MenuItem item = new MenuItem(Level.Name);
-                item.Sensitive = false;
+                MenuItem item = new MenuItem(Level.Name) { Sensitive = false };
                 menu.Append(item);
             }
             menu.ShowAll();
@@ -1118,21 +1125,46 @@ namespace Weland
             pluginsItem.Submenu = menu;
         }
 
+        void LoadScenarioLevel(int n)
+        {
+            var loaded = new Level();
+            // Editing must not mutate the stored version of another map through
+            // Level.Chunks, which normally aliases the directory entry.
+            loaded.Load(mapfile.Directory[n].Clone());
+            currentLevelIndex = n;
+            Level = loaded;
+            selection.Clear();
+            editor.ClearUndo();
+            Center(0, 0);
+            AdjustScrollRange();
+            layer1.Active = true;
+            ResetViewHeight();
+            window1.Title = Level.Name;
+            ChooseTool(editor.Tool);
+            editor.Changed = false;
+            BuildLevelMenu();
+        }
+
         public void SelectLevel(int n)
         {
-            if (CheckSave())
+            if (n == currentLevelIndex || !mapfile.Directory.TryGetValue(n, out var entry) || !entry.Chunks.ContainsKey(MapInfo.Tag)) return;
+            try
             {
-                Level = new Level();
-                Level.Load(mapfile.Directory[n]);
-                selection.Clear();
-                editor.ClearUndo();
-                Center(0, 0);
-                AdjustScrollRange();
-                layer1.Active = true;
-                ResetViewHeight();
-                window1.Title = mapfile.Overlays[n].LevelName;
-                ChooseTool(editor.Tool);
-                editor.Changed = false;
+                // Switching retains edits in memory. Save writes the entire scenario.
+                editor.Tool = editor.Tool;
+                editor.CommitHistory(true);
+                if (editor.Changed)
+                {
+                    Level.AssurePlayerStart();
+                    mapfile = ScenarioMaps.Update(mapfile, currentLevelIndex, Level.Save());
+                    scenarioChanged = true;
+                }
+                LoadScenarioLevel(n);
+            }
+            catch (Exception e)
+            {
+                using var dialog = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Error, ButtonsType.Close, "Could not switch maps.");
+                dialog.SecondaryText = e.Message; dialog.Run();
             }
         }
 
@@ -1140,25 +1172,21 @@ namespace Weland
         {
             try
             {
-                MapFile w = new MapFile();
-                w.Load(filename);
+                var w = new MapFile(); w.Load(filename);
+                var indexes = ScenarioMaps.Indexes(w);
+                if (indexes.Length == 0) throw new Wadfile.BadMapException("This file contains no editable maps.");
+                // Validate the first map before replacing the open document.
+                var first = new Level(); first.Load(w.Directory[indexes[0]].Clone());
                 mapfile = w;
-                if (TerminalPictureImports.LevelCount(mapfile) > 1)
-                {
-                    Filename = "";
-                }
-                else
-                {
-                    Filename = filename;
-                }
+                Filename = filename;
+                scenarioChanged = false;
                 editor.Changed = false;
-                SelectLevel(0);
-                BuildLevelMenu();
+                LoadScenarioLevel(indexes[0]);
             }
-            catch (Wadfile.BadMapException e)
+            catch (Exception e)
             {
-                using var dialog = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Error, ButtonsType.Close, e.Message);
-                dialog.Run();
+                using var dialog = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Error, ButtonsType.Close, "Could not open the scenario.");
+                dialog.SecondaryText = e.Message; dialog.Run();
             }
         }
 
@@ -1189,6 +1217,8 @@ namespace Weland
         public void NewLevel()
         {
             mapfile = new MapFile();
+            currentLevelIndex = 0;
+            scenarioChanged = false;
             Level = new Level();
             levelItem.Submenu = null;
             Center(0, 0);
@@ -1218,7 +1248,7 @@ namespace Weland
             string message;
             if (TerminalPictureImports.LevelCount(mapfile) > 1)
             {
-                message = "Export level";
+                message = "Save scenario as";
             }
             else
             {
@@ -1226,7 +1256,8 @@ namespace Weland
             }
             using var d = new FileChooserDialog(message, window1, FileChooserAction.Save, "Cancel", ResponseType.Cancel, "Save", ResponseType.Accept);
             d.SetCurrentFolder(Weland.Settings.GetSetting("LastSave/Folder", Environment.GetFolderPath(Environment.SpecialFolder.Personal)));
-            d.CurrentName = Level.Name + ".sceA";
+            d.CurrentName = TerminalPictureImports.LevelCount(mapfile) > 1 && !String.IsNullOrEmpty(Filename)
+                ? Path.GetFileName(Filename) : Level.Name + ".sceA";
             d.DoOverwriteConfirmation = true;
             try
             {
@@ -1234,9 +1265,10 @@ namespace Weland
                 {
                     Level.AssurePlayerStart();
                     Redraw();
-                    var output = TerminalPictureImports.Export(Level.Save(),mapfile);
-                    output.Save(d.Filename);
+                    var output = TerminalPictureImports.ExportScenario(Level.Save(), currentLevelIndex, mapfile);
+                    ScenarioMaps.SaveAtomic(output, d.Filename, Filename);
                     mapfile = output;
+                    scenarioChanged = false;
                     Filename = d.Filename;
 
                     Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));
@@ -1275,9 +1307,11 @@ namespace Weland
                 {
                     Level.AssurePlayerStart();
                     Redraw();
-                    var output = TerminalPictureImports.Export(Level.Save(),mapfile);
-                    output.Save(Filename);
+                    var output = TerminalPictureImports.ExportScenario(Level.Save(), currentLevelIndex, mapfile);
+                    ScenarioMaps.SaveAtomic(output, Filename, Filename);
                     mapfile = output;
+                    scenarioChanged = false;
+                    BuildLevelMenu();
                     editor.Changed = false;
                     success = true;
                 }
@@ -1635,6 +1669,11 @@ namespace Weland
             {
                 if (tool == Tool.Circle) circleOptions.Show();
                 else circleOptions.Hide();
+            }
+            if (boxOptions != null)
+            {
+                if (tool == Tool.Box) boxOptions.Show();
+                else boxOptions.Hide();
             }
             if (tool == Tool.Zoom)
             {

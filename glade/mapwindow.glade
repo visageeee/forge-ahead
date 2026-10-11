@@ -2169,7 +2169,7 @@
                   <object class="GtkRadioToolButton" id="scaleButton">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="tooltip-text" translatable="yes">Scale Selection (S). Drag toward or away from its center; Shift snaps to 10 percent increments.</property>
+                    <property name="tooltip-text" translatable="yes">Scale / Warp Selection (S). Drag to stretch X and Y; hold Shift for proportional scaling in 10 percent increments.</property>
                     <property name="label" translatable="yes">Scale</property>
                     <property name="group">selectButton</property>
                     <signal name="toggled" handler="OnChooseTool" swapped="no"/>

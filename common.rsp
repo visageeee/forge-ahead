@@ -19,6 +19,8 @@ BoxGeometry.cs
 SelectionBox.cs
 NestedBox.cs
 CircleTool.cs
+CircleTessellation.cs
+ShapeOutline.cs
 MoveTool.cs
 RotateTool.cs
 ScaleTool.cs
@@ -143,3 +145,5 @@ gtk-sharp/Widgets.cs
 shapes/PaveTextureSelection.cs
 
 LineCut.cs
+
+level/ScenarioMaps.cs

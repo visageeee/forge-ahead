@@ -92,19 +92,30 @@ namespace Weland
         // update palette based on settings in editor
         void UpdateTexturePalette(bool forceCollection)
         {
-            int textureCollectionIndex = collectionMapping.IndexOf(editor.PaintDescriptor.Collection);
-            if (forceCollection || textureCollection.Active != textureCollectionIndex)
-            {
-                UpdateCollection(editor.PaintDescriptor.Collection);
-                textureCollection.Changed -= OnCollectionChanged;
-                textureCollection.Active = textureCollectionIndex;
-                textureCollection.Changed += OnCollectionChanged;
-            }
-
-            SelectBitmap(editor.PaintDescriptor.Bitmap);
+            // Rebuilding the palette must not replace the sampled descriptor
+            // or transfer mode via its selection-change callbacks.
+            textureIcons.SelectionChanged -= OnTextureSelected;
             textureTransferMode.Changed -= OnTransferModeChanged;
-            textureTransferMode.Active = transferModeMapping.IndexOf(editor.PaintTransferMode);
-            textureTransferMode.Changed += OnTransferModeChanged;
+            try
+            {
+                int textureCollectionIndex = collectionMapping.IndexOf(editor.PaintDescriptor.Collection);
+                if (forceCollection || textureCollection.Active != textureCollectionIndex)
+                {
+                    UpdateCollection(editor.PaintDescriptor.Collection);
+                    textureCollection.Changed -= OnCollectionChanged;
+                    textureCollection.Active = textureCollectionIndex;
+                    textureCollection.Changed += OnCollectionChanged;
+                }
+
+                SelectBitmap(editor.PaintDescriptor.Bitmap);
+                textureTransferMode.Active = transferModeMapping.IndexOf(editor.PaintTransferMode);
+            }
+            finally
+            {
+                textureIcons.SelectionChanged -= OnTextureSelected;
+                textureIcons.SelectionChanged += OnTextureSelected;
+                textureTransferMode.Changed += OnTransferModeChanged;
+            }
         }
 
         void OnCollectionChanged(object o, EventArgs args)

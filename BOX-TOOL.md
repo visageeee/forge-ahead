@@ -102,10 +102,17 @@ These visual settings do not change geometry or selection/snap distances.
 
 ## Right-button move shortcut
 
-Right-click and drag anywhere in the map to move the current selection using
+Right-click and drag in geometry tools to move the current selection using
 the Move tool's snapping and undo behavior. The active tool and selection stay
 unchanged. An empty selection does nothing. Middle-button dragging still pans;
 Alt-click remains available for picking paint values and alternate selection.
+
+In Floor Height, Ceiling Height, Liquids, Ambient Sounds, Random Sounds,
+Floor Textures, Ceiling Textures and Polygon Types, right-click picks up the
+clicked polygon's value instead. The light paint modes also support this.
+The palette updates immediately; right-drag samples polygons under the cursor.
+Sampling changes no map data and adds no undo step. Left-click paints the picked
+value, including None for liquids/sounds and the transfer mode for textures.
 
 ## Select hover and polygon groups
 
@@ -158,9 +165,9 @@ Selected polygons carry their objects and annotations along; player and monster 
 
 ## Scale tool
 
-Select vertices, lines or polygons, then choose Scale (S). Drag away from the center cross to enlarge the selection, or toward it to shrink it proportionally. Hold Shift to snap the scale factor to 10% increments. Start the drag away from the center.
+Select vertices, lines or polygons, then choose Scale (S). Drag to stretch or compress X and Y independently around the center cross. Starting near a corner makes both axes follow the cursor directly. Hold Shift to preserve proportions and snap the uniform scale factor to 10% increments. Shift can be pressed or released during the drag; each update uses the original selection coordinates.
 
-Selected polygons carry their objects and annotations; object facing and polygon heights stay unchanged. Shared endpoints scale once, and each drag is one undo/redo step. Scaling that would collapse vertices, lines or polygons, or exceed map coordinate limits, is ignored. Right-drag still moves the selection.
+Selected polygons carry their objects and annotations; object facing and polygon heights stay unchanged. Shared endpoints scale once, and each drag is one undo/redo step. Scaling that would collapse geometry, duplicate an unselected vertex, flip or make an affected polygon concave, or exceed map coordinate limits, is ignored. Dragging across the pivot does not mirror the selection. Right-drag still moves the selection.
 
 Paving uses an available wall collection from the loaded Shapes file and palette zero, rather than assuming the stock scenario's bitmap indices exist. Paving skips uniform-color placeholder bitmaps. If stock default indices are placeholders or absent, it chooses detailed bitmaps from that wall collection instead. If no wall collection is loaded, Pave, cleanup and Nuke Textures leave the map unchanged and explain how to load Shapes.
 # Terminal editor
@@ -281,3 +288,66 @@ annotations move to the appropriate polygon. One completed cut is one undo step.
 Changing tools cancels an unfinished line. Incomplete cuts ending inside a polygon,
 concave cuts, nonintegral edge crossings, and geometry exceeding the eight-vertex
 limit are rejected without leaving partial geometry.
+
+## Circle tessellation
+
+Select the Circle tool and enable **Tessellate** in its options. Set **Sides**
+and **Edge length (WU)**, then click and drag to expand a connected tile patch.
+The preview shows all tiles before release; the status bar shows their count or
+why placement is blocked. Release creates and selects the whole patch in one
+**Tessellate polygons** undo step. Escape or changing tools/options cancels it.
+
+Triangles, squares, and hexagons tile directly. Eight sides makes the standard
+octagon-and-square pattern, including square fillers between four octagons.
+Five and seven sides remain available for single circle polygons, but do not
+have a tessellation pattern. Triangles are added in paired cells; staggered rows
+and columns can give the patch a stepped outline.
+
+The first tile starts from the snapped click position. Edge lengths use map
+world units (1 WU = 1024 map coordinates). Triangle/hexagon lattice dimensions
+are rounded once to integer coordinates, so adjacent tiles share identical
+vertices even at small sizes. Dragging in either direction expands from the
+first cell; reaching the next cell step adds a row or column.
+
+Patterns add tiles in empty space and can connect to existing boundaries.
+Matching existing tiles and shared lines/vertices are reused. Tessellation does
+not inset or cut across existing polygons: any conflicting tile blocks the
+whole patch. Patches are limited to 256 polygons per drag; larger areas can be
+built with repeated drags. Size and tessellation mode are remembered.
+
+## Filled shapes and outlines
+
+Both Box and Circle have a **Filled** checkbox, enabled by default and remembered
+independently. Checked creates polygons with the existing inset behavior.
+Unchecked creates only boundary vertices and lines and selects those lines.
+Circle tessellation also follows this setting: unfilled patches keep their shared
+lines, without creating polygons. A complete drag remains one undo step.
+
+Outlines reuse existing boundaries and split shared walls when attaching to
+empty space. They cannot draw unsplit geometry through or inside an existing
+polygon; use Filled for polygon insets. Repeating an outline reuses its geometry
+without adding an undo step. Drawing the same shape with Filled enabled can fill
+an existing empty outline, and the Fill tool remains available.
+
+## Merged scenarios
+
+Open a merged `.sceA` scenario as usual. The **Level** menu lists maps by their
+original scenario IDs and names, with the active map checked. Resource entries
+are not listed as maps. Files whose first map is not ID 0 are supported.
+
+Switching maps retains the current edits in memory. **Save** writes all maps back
+to the opened scenario, and **Save As** creates a complete scenario copy rather
+than exporting only the selected map. Closing or opening another file prompts
+for changes from both the current map and maps edited earlier in the session.
+Undo history starts fresh when switching maps, as in the original map selector.
+
+Unedited maps retain their original chunk bytes and directory metadata. Edited
+map IDs remain unchanged, so level transfers keep their targets. Per-level Lua,
+terminal data, custom chunks, and shared WAD resources are retained. Imported
+terminal picture IDs are allocated across the whole scenario; resources still
+referenced by other maps are kept. Visual mode continues to edit only the active
+map and returns its changes to the scenario session.
+
+Saves write a complete temporary file before replacing the destination. Native
+Mac resource forks are copied when saving on macOS. External scenario assets
+such as Shapes and Sounds remain separate files.

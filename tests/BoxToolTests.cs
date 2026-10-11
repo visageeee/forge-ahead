@@ -901,8 +901,8 @@ class BoxToolTests
             editor.ButtonPress(0,0,EditorModifiers.None);editor.ButtonRelease(100,100,EditorModifiers.None);
             Check(Snapshot(level)==before && !editor.Changed,"Empty Move changed map");
         });
-        Test("right drag moves selection with any active tool and ends on release", () => {
-            foreach (Tool tool in new[] {Tool.Select, Tool.Pan, Tool.Zoom, Tool.Box, Tool.Circle, Tool.FloorHeight}) {
+        Test("right drag moves selection with geometry tools and ends on release", () => {
+            foreach (Tool tool in new[] {Tool.Select, Tool.Pan, Tool.Zoom, Tool.Box, Tool.Circle}) {
                 var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=tool;editor.Selection.Point=0;
                 editor.ButtonPress(500,500,EditorModifiers.RightClick);
                 editor.Motion(520,530,EditorModifiers.RightClick);
@@ -1255,8 +1255,8 @@ class BoxToolTests
             var level=new Level();Box(level,0,0,1000,500);level.NewObject(P(750,250),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=90;
             level.Annotations.Add(new Annotation{X=750,Y=250,PolygonIndex=0,Text="scale"});var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
             Check(editor.Selection.Polygon==0 && editor.ShowRotationCenter(),"Scale lost selection or pivot");string before=CanonicalSnapshot(level);
-            editor.ButtonPress(1000,250,EditorModifiers.None);editor.Motion(1500,250,EditorModifiers.None);
-            Check(editor.ScalingSelection && !editor.RotatingSelection && editor.HistoryLabels.Count==1,"Scale drag state wrong");editor.ButtonRelease(1500,250,EditorModifiers.None);
+            editor.ButtonPress(1000,250,EditorModifiers.Shift);editor.Motion(1500,250,EditorModifiers.Shift);
+            Check(editor.ScalingSelection && !editor.RotatingSelection && editor.HistoryLabels.Count==1,"Scale drag state wrong");editor.ButtonRelease(1500,250,EditorModifiers.Shift);
             Check(level.Endpoints.Contains(P(-500,-250)) && level.Endpoints.Contains(P(1500,750)),"Scale changed center or aspect ratio");
             Check(level.Objects[0].X==1000 && level.Objects[0].Y==250 && Math.Abs(level.Objects[0].Facing-90)<1 && level.Annotations[0].X==1000,"Scale lost contents or changed facing");
             Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Scale selection","Scale not one undo step");string after=CanonicalSnapshot(level);
@@ -1264,8 +1264,8 @@ class BoxToolTests
         });
         Test("Scale groups preserve shared vertices and recompute from original positions", () => {
             var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var original=level.Endpoints.ToArray();var editor=Editor(level);
-            editor.Selection.Polygons.UnionWith(new short[]{0,1});editor.Tool=Tool.Scale;editor.ButtonPress(2000,500,EditorModifiers.None);
-            for(short x=1990;x>=1510;x-=10)editor.Motion(x,500,EditorModifiers.None);editor.ButtonRelease(1500,500,EditorModifiers.None);
+            editor.Selection.Polygons.UnionWith(new short[]{0,1});editor.Tool=Tool.Scale;editor.ButtonPress(2000,500,EditorModifiers.Shift);
+            for(short x=1990;x>=1510;x-=10)editor.Motion(x,500,EditorModifiers.Shift);editor.ButtonRelease(1500,500,EditorModifiers.Shift);
             for(int i=0;i<original.Length;i++)Check(level.Endpoints[i].Equals(P(500+original[i].X/2,250+original[i].Y/2)),"Shared endpoint scaled twice or rounding accumulated");
             Check(editor.HistoryLabels.Count==2,"Scale group created extra history");Validate(level);
         });
@@ -1281,7 +1281,7 @@ class BoxToolTests
         });
         Test("Scale overflow is atomic undo cancels active drag and right drag moves", () => {
             var level=new Level();Box(level,30000,0,32000,1000);var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;string before=CanonicalSnapshot(level);
-            editor.ButtonPress(32000,500,EditorModifiers.None);editor.ButtonRelease(31000,10000,EditorModifiers.None);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Overflow scale changed geometry");
+            editor.ButtonPress(32000,500,EditorModifiers.None);editor.ButtonRelease(31000,10000,EditorModifiers.Shift);Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Overflow scale changed geometry");
             editor.ButtonPress(32000,500,EditorModifiers.None);editor.Motion(31500,500,EditorModifiers.None);editor.Undo();Check(!editor.ScalingSelection && CanonicalSnapshot(level)==before,"Undo did not cancel scale drag");
             editor.ButtonPress(31000,500,EditorModifiers.RightClick);editor.ButtonRelease(30900,500,EditorModifiers.RightClick);Check(level.Endpoints.Contains(P(29900,0)) && editor.HistoryLabels[1]=="Move selection","Scale replaced right-drag move");
         });
@@ -1333,6 +1333,279 @@ class BoxToolTests
             Check(loaded.Endpoints.SequenceEqual(endpoints) && loaded.Objects.Count==objects && loaded.Polygons.Count==polygons,"Paving changed map geometry or objects");
             foreach(var texture in loaded.Polygons.SelectMany(p=>new[]{p.FloorTexture,p.CeilingTexture}).Concat(loaded.Sides.Select(s=>s.Primary.Texture)).Where(t=>!t.IsEmpty()))
                 Check(PaveTextureSelection.HasTextureDetail(shapes.GetShape(texture)),"Paved surface still has a blank placeholder");
+        });
+        Test("circle tessellation creates connected convex patches without gaps or overlaps", () => {
+            foreach (int sides in new[] {3,4,6,8})
+                foreach (int size in new[] {17,1000})
+                    foreach (int direction in new[] {-1,1}) {
+                        Check(CircleTessellation.TryBuild(P(0,0),P(direction*size*3,direction*size*3),sides,size,out var tiles,out string reason),reason);
+                        long Cross(Point a,Point b,Point c) => (long)(b.X-a.X)*(c.Y-a.Y)-(long)(b.Y-a.Y)*(c.X-a.X);
+                        bool Separate(System.Collections.Generic.List<Point> a,System.Collections.Generic.List<Point> b) =>
+                            Enumerable.Range(0,a.Count).Any(i=>b.All(p=>Cross(a[i],a[(i+1)%a.Count],p)<=0));
+                        for(int i=0;i<tiles.Count;i++)for(int j=i+1;j<tiles.Count;j++)
+                            Check(Separate(tiles[i],tiles[j]) || Separate(tiles[j],tiles[i]),"Tiles overlap");
+                        var level=new Level();
+                        Check(level.PlanCircleTessellation(tiles,out var plan,out var selected,out int added,out reason),reason);
+                        Check(added==tiles.Count && selected.Distinct().Count()==added,"Missing tile");
+                        Validate(plan);
+                        Check(plan.Endpoints.Count-plan.Lines.Count+plan.Polygons.Count==1,"Pattern has an enclosed gap");
+                        var seen=new System.Collections.Generic.HashSet<short>{0};bool changed=true;
+                        while(changed) {changed=false;foreach(var line in plan.Lines)
+                            if(line.ClockwisePolygonOwner!=-1 && line.CounterclockwisePolygonOwner!=-1 &&
+                               (seen.Contains(line.ClockwisePolygonOwner)||seen.Contains(line.CounterclockwisePolygonOwner))) {
+                                changed|=seen.Add(line.ClockwisePolygonOwner);changed|=seen.Add(line.CounterclockwisePolygonOwner);
+                            }
+                        }
+                        Check(seen.Count==plan.Polygons.Count,"Patch is disconnected");
+                        if(sides==8) Check(plan.Polygons.Any(p=>p.VertexCount==4) && plan.Polygons.Any(p=>p.VertexCount==8),"Octagon fillers missing");
+                        var loaded=new Level();loaded.Load(plan.Save().Clone());Validate(loaded);
+                        Check(Area2(loaded)==Area2(plan),"Saving changed tile area");
+                    }
+        });
+        Test("circle tessellation previews without changes and records one undo step", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;
+            editor.CircleSides=6;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;
+            string before=CanonicalSnapshot(level);
+            editor.StartCircle(0,0);editor.UpdateCircle(3000,3000,false);
+            Check(level.Polygons.Count==0 && editor.CircleTiles.Count>1 && editor.CircleMessage==null,"Preview modified map or failed");
+            int count=editor.CircleTiles.Count;editor.FinishCircle(3000,3000,false);
+            Check(level.Polygons.Count==count && editor.Selection.Polygons.Count==count,"Patch was not selected");
+            Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Tessellate polygons","Drag made multiple undo steps");
+            Validate(level);string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Undo left tile geometry");
+            editor.Redo();Check(CanonicalSnapshot(level)==after && editor.Selection.Polygons.Count==count,"Redo failed");Validate(level);
+        });
+        Test("circle tessellation reuses existing tiles and shared boundary geometry", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Circle;
+            editor.CircleSides=4;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;
+            editor.StartCircle(0,0);editor.FinishCircle(2000,0,false);
+            Check(editor.CircleMessage==null && level.Polygons.Count==3,"Existing tile duplicated or blocked");
+            Check(level.Endpoints.Count==8 && level.Lines.Count==10,"Shared boundaries duplicated");Validate(level);
+            int history=editor.HistoryLabels.Count;string before=CanonicalSnapshot(level);
+            editor.StartCircle(0,0);editor.FinishCircle(2000,0,false);
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==history,"Repeated patch changed map/history");
+            Check(editor.Selection.Polygons.Count==3,"Existing patch not selected");
+            editor.Undo();Check(level.Polygons.Count==1,"Undo removed original tile");Validate(level);
+            var adjoining=new Level();Box(adjoining,-1000,0,0,1000);
+            Check(CircleTessellation.TryBuild(P(0,0),P(0,0),4,1000,out var tiles,out string reason),reason);
+            Check(adjoining.PlanCircleTessellation(tiles,out var plan,out _,out int added,out reason),reason);
+            Check(added==1 && plan.Endpoints.Count==6 && plan.Lines.Count==7,"Adjacent tile did not share edge");Validate(plan);
+        });
+        Test("blocked circle tessellation is atomic and cancellation preserves geometry", () => {
+            var level=new Level();Box(level,2200,200,2400,400);var editor=Editor(level);editor.Tool=Tool.Circle;
+            editor.CircleSides=4;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;
+            editor.Selection.Polygon=0;string before=CanonicalSnapshot(level);
+            editor.StartCircle(0,0);editor.FinishCircle(2000,0,false);
+            Check(editor.CircleMessage!=null && CanonicalSnapshot(level)==before && !editor.CanUndo,"Blocked patch changed geometry/history");
+            Check(editor.Selection.Polygon==0,"Failed patch lost selection");
+            editor.StartCircle(-3000,-3000);editor.UpdateCircle(-2000,-2000,false);editor.CancelCircle();
+            Check(editor.CircleTiles.Count==0 && !editor.DrawingCircle && CanonicalSnapshot(level)==before,"Cancel left geometry");
+            editor.StartCircle(-3000,-3000);editor.Tool=Tool.Select;
+            Check(!editor.DrawingCircle && editor.CircleTiles.Count==0,"Tool change kept preview");
+            editor.Tool=Tool.Circle;editor.StartCircle(-3000,-3000);editor.CircleTileSize=2000;
+            Check(!editor.DrawingCircle,"Changing size kept stale preview");
+            editor.StartCircle(-3000,-3000);editor.CircleSides=6;Check(!editor.DrawingCircle,"Changing sides kept stale preview");
+            editor.StartCircle(-3000,-3000);editor.CircleTessellationEnabled=false;Check(!editor.DrawingCircle,"Changing mode kept stale preview");
+        });
+        Test("circle tessellation handles unsupported sides limits and hidden matching tiles", () => {
+            foreach(int sides in new[]{5,7}) Check(!CircleTessellation.TryBuild(P(0,0),P(1000,1000),sides,1000,out _,out string reason) && reason!=null,"Unsupported tiling accepted");
+            Check(!CircleTessellation.TryBuild(P(0,0),P(10000,10000),4,16,out var large,out _) && large.Count==0,"Oversized patch accepted");
+            Check(CircleTessellation.TryBuild(P(0,0),P(1500,1500),4,100,out var limit,out _) && limit.Count==256,"Exact tile cap rejected");
+            Check(!CircleTessellation.TryBuild(P(32700,32700),P(32760,32760),6,1000,out _,out _),"Coordinate overflow wrapped");
+            var level=new Level();Box(level,0,0,1000,1000);
+            Check(CircleTessellation.TryBuild(P(0,0),P(0,0),4,1000,out var tiles,out _),"Cannot build single tile");
+            Level.Filter=p=>false;
+            try { Check(!level.PlanCircleTessellation(tiles,out _,out _,out _,out _),"Hidden tile selected"); }
+            finally { Level.Filter=p=>true; }
+        });
+        Test("Filled options default on and box/circle outlines create only reusable boundaries", () => {
+            foreach(bool circle in new[]{false,true}) {
+                var level=new Level();var editor=Editor(level);editor.Tool=circle?Tool.Circle:Tool.Box;
+                Check(editor.BoxFilled && editor.CircleFilled,"Filled defaults changed");
+                if(circle) {editor.CircleFilled=false;editor.CircleSides=6;editor.StartCircle(0,0);editor.FinishCircle(2000,2000,true);}
+                else {editor.BoxFilled=false;editor.StartBox(0,0);editor.FinishBox(2000,2000);}
+                int count=circle?6:4;
+                Check(level.Polygons.Count==0 && level.Endpoints.Count==count && level.Lines.Count==count,"Outline created a polygon or duplicate geometry");
+                Check(editor.Selection.Lines.Count==count && editor.HistoryLabels.Count==2,"Outline selection/history failed");
+                Check(level.Lines.All(l=>l.ClockwisePolygonOwner==-1 && l.CounterclockwisePolygonOwner==-1),"Outline has polygon owners");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(level.Lines.Count==0 && level.Endpoints.Count==0,"Outline undo incomplete");
+                editor.Redo();Check(CanonicalSnapshot(level)==after && editor.Selection.Lines.Count==count,"Outline redo failed");
+                if(circle) {editor.StartCircle(0,0);editor.FinishCircle(2000,2000,true);}
+                else {editor.StartBox(0,0);editor.FinishBox(2000,2000);}
+                Check(CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==2,"Repeated outline duplicated geometry/history");
+                if(circle) {editor.CircleFilled=true;editor.StartCircle(0,0);editor.FinishCircle(2000,2000,true);}
+                else {editor.BoxFilled=true;editor.StartBox(0,0);editor.FinishBox(2000,2000);}
+                Check(level.Polygons.Count==1 && level.Lines.Count==count,"Filled did not reuse outline");Validate(level);
+            }
+        });
+        Test("unfilled tessellation keeps all shared lines selected and can be filled later", () => {
+            foreach(int sides in new[]{3,4,6,8}) {
+                var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;
+                editor.CircleSides=sides;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;editor.CircleFilled=false;
+                editor.StartCircle(0,0);editor.FinishCircle(3000,3000,false);
+                Check(editor.CircleMessage==null && level.Polygons.Count==0 && level.Lines.Count>0,"Outline tessellation failed");
+                Check(level.Endpoints.Distinct().Count()==level.Endpoints.Count,"Duplicate outline vertices");
+                Check(level.Lines.Select(l=>string.Join(",",l.EndpointIndexes.OrderBy(i=>i))).Distinct().Count()==level.Lines.Count,"Duplicate shared outline lines");
+                Check(editor.Selection.Lines.Count==level.Lines.Count && editor.HistoryLabels.Count==2,"Incomplete outline selection/undo");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(level.Lines.Count==0,"Patch undo failed");editor.Redo();
+                Check(CanonicalSnapshot(level)==after,"Patch redo failed");
+                int lines=level.Lines.Count;editor.CircleFilled=true;editor.StartCircle(0,0);editor.FinishCircle(3000,3000,false);
+                Check(editor.CircleMessage==null && level.Polygons.Count>0 && level.Lines.Count==lines,"Filling outline patch added duplicate lines");Validate(level);
+            }
+        });
+        Test("outlines attach by splitting shared walls atomically and selecting final line indexes", () => {
+            var level=new Level();Box(level,-1000,0,0,3000);
+            var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=4;editor.CircleTileSize=1000;
+            editor.CircleFilled=false;editor.CircleTessellationEnabled=true;
+            string before=CanonicalSnapshot(level);editor.StartCircle(0,0);editor.FinishCircle(0,2000,false);
+            Check(editor.CircleMessage==null && level.Polygons.Count==1 && level.Polygons[0].VertexCount==6,"Outline did not split neighbor wall");
+            Check(editor.Selection.Lines.Count==10 && editor.Selection.Lines.All(i=>i>=0 && i<level.Lines.Count),"Renumbering damaged outline selection");Validate(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Shared-wall outline undo failed");
+            editor.Tool=Tool.Box;editor.BoxFilled=false;editor.StartBox(-900,100);editor.FinishBox(-100,900);
+            Check(editor.BoxMessage!=null && CanonicalSnapshot(level)==before,"Outline created unsplit geometry inside polygon");
+            editor.StartBox(0,0);editor.BoxFilled=true;Check(!editor.DrawingBox,"Filled change left stale box preview");
+            editor.Tool=Tool.Circle;editor.StartCircle(0,0);editor.CircleFilled=true;Check(!editor.DrawingCircle,"Filled change left stale circle preview");
+        });
+        Test("merged scenario edits preserve map IDs untouched chunks and directory overlays", () => {
+            var source=new MapFile();
+            foreach(int index in new[]{2,7,11}) {
+                var level=new Level();Box(level,0,0,1000,1000);level.Name="Map "+index;
+                level.Chunks[Wadfile.Chunk("TEST")]=new byte[]{(byte)index,99,42};
+                level.Chunks[EmbeddedLua.Tag]=EmbeddedLua.Write(new[]{new EmbeddedLuaScript{Name="script",Text="return "+index}});
+                level.Chunks[TerminalCodec.Tag]=TerminalCodec.Write(new[]{TerminalDocument.Create()});
+                source.Directory[index]=level.Save().Clone();source.Overlays[index]=ScenarioMaps.Overlay(source.Directory[index]);
+            }
+            source.Overlays[11].LevelName="Directory-only name";source.Overlays[11].EntryPointFlags=(EntryPointFlags)123;
+            var resource=new Wadfile.DirectoryEntry();resource.Chunks[Wadfile.Chunk("MML ")]=new byte[]{1,2,3};source.Directory[0]=resource;
+            Check(ScenarioMaps.Indexes(source).SequenceEqual(new[]{2,7,11}),"Resources listed as maps");
+            var originals=source.Directory.ToDictionary(p=>p.Key,p=>p.Value.Clone());
+            var first=new Level();first.Load(source.Directory[2].Clone());first.Name="Edited first";first.Polygons[0].FloorHeight=100;
+            var staged=ScenarioMaps.Update(source,2,first.Save());
+            var second=new Level();second.Load(staged.Directory[7].Clone());second.Name="Edited second";second.Polygons[0].CeilingHeight=2000;
+            var output=TerminalPictureImports.ExportScenario(second.Save(),7,staged);
+            Check(output.Directory.Keys.SequenceEqual(new[]{0,2,7,11}),"Scenario map IDs changed");
+            Check(ScenarioMaps.Name(output,2)=="Edited first" && ScenarioMaps.Name(output,7)=="Edited second","Staged edits lost");
+            Check(output.Overlays[11].LevelName=="Directory-only name" && (int)output.Overlays[11].EntryPointFlags==123,"Untouched overlay changed");
+            foreach(int index in new[]{0,11}) foreach(var chunk in originals[index].Chunks)
+                Check(output.Directory[index].Chunks[chunk.Key].SequenceEqual(chunk.Value),"Untouched map/resource chunk changed");
+            Check(source.Directory[2].Chunks.All(p=>originals[2].Chunks[p.Key].SequenceEqual(p.Value)),"Editing mutated source snapshot");
+            string path=System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid()+".sceA");
+            try {
+                ScenarioMaps.SaveAtomic(output,path);var loaded=new MapFile();loaded.Load(path);
+                Check(loaded.Version==4 && ScenarioMaps.Indexes(loaded).SequenceEqual(new[]{2,7,11}),"Engine scenario format or IDs incorrect");
+                Check(ScenarioMaps.Name(loaded,11)=="Directory-only name","Overlay did not survive save");
+                foreach(var entry in output.Directory)foreach(var chunk in entry.Value.Chunks)
+                    Check(loaded.Directory[entry.Key].Chunks[chunk.Key].SequenceEqual(chunk.Value),"Scenario round trip changed chunk");
+                var map=new Level();map.Load(loaded.Directory[2].Clone());Check(map.Polygons[0].FloorHeight==100,"First map edit lost");Validate(map);
+                map.Load(loaded.Directory[7].Clone());Check(map.Polygons[0].CeilingHeight==2000,"Second map edit lost");Validate(map);
+            } finally {System.IO.File.Delete(path);}
+        });
+        Test("merged scenario picture imports are global and preserved across map edits", () => {
+            var source=new MapFile();var picture=TerminalPictureImports.Encode(new Image(2,2));
+            foreach(int index in new[]{0,3}) {
+                var level=new Level();Box(level,0,0,1000,1000);
+                level.Chunks[TerminalPictureImports.Tag]=TerminalPictureImports.Write(new System.Collections.Generic.Dictionary<int,byte[]>{{1000+index,picture}});
+                var doc=TerminalDocument.Create();doc.Pages[1].Type=TerminalPageType.Picture;doc.Pages[1].Permutation=1001;
+                level.Chunks[TerminalCodec.Tag]=TerminalCodec.Write(new[]{doc});
+                source.Directory[index]=level.Save().Clone();
+            }
+            var output=TerminalPictureImports.ExportScenario(source.Directory[0],0,source);
+            Check(output.Directory.ContainsKey(1000) && output.Directory.ContainsKey(1003),"Another map's picture was dropped");
+            Check(TerminalPictureImports.UsedIds(output).Contains(1001) && TerminalPictureImports.NextId(TerminalPictureImports.UsedIds(output))==1002,"Global picture allocation ignored another map");
+            // The second map can refer to a managed picture imported by the first.
+            var sharedDoc=TerminalDocument.Create();sharedDoc.Pages[1].Type=TerminalPageType.Picture;sharedDoc.Pages[1].Permutation=1000;
+            var other=output.Directory[3].Clone();other.Chunks[TerminalCodec.Tag]=TerminalCodec.Write(new[]{sharedDoc});
+            var visual=TerminalPictureImports.Export(other,output);
+            Check(visual.Directory.ContainsKey(1000) && visual.Directory.ContainsKey(1003),"Visual mode lost shared scenario pictures");
+            var modified=output.Directory[0].Clone();modified.Chunks.Remove(TerminalPictureImports.Tag);
+            var withoutFirst=TerminalPictureImports.ExportScenario(modified,0,output);
+            Check(!withoutFirst.Directory.ContainsKey(1000) && withoutFirst.Directory.ContainsKey(1003),"Removing one archive removed another map's pictures");
+            var sharedSource=ScenarioMaps.Update(output,3,other);
+            var keepShared=TerminalPictureImports.ExportScenario(modified,0,sharedSource);
+            Check(keepShared.Directory.ContainsKey(1000),"Removing the owner's archive broke another map's picture reference");
+            var brokenTerminal=modified.Clone();brokenTerminal.Chunks[TerminalCodec.Tag]=new byte[]{1};
+            var keepUnknown=TerminalPictureImports.ExportScenario(brokenTerminal,0,output);
+            Check(keepUnknown.Directory.ContainsKey(1000),"Unreadable untouched terminal caused a resource loss");
+            var conflict=output.Directory[3].Clone();var different=(byte[])picture.Clone();different[different.Length-3]^=1;
+            conflict.Chunks[TerminalPictureImports.Tag]=TerminalPictureImports.Write(new System.Collections.Generic.Dictionary<int,byte[]>{{1000,different}});
+            bool rejected=false;try{TerminalPictureImports.ExportScenario(conflict,3,output);}catch(System.IO.InvalidDataException){rejected=true;}
+            Check(rejected && output.Directory[1000].Chunks[Wadfile.Chunk("PICT")].SequenceEqual(picture),"Conflicting picture IDs overwrote resource");
+        });
+        Test("merged scenario atomic save keeps the old file on write failure", () => {
+            string path=System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid()+".sceA");
+            byte[] original=new byte[]{10,20,30,40};System.IO.File.WriteAllBytes(path,original);
+            try {
+                var bad=new MapFile();var entry=new Wadfile.DirectoryEntry();entry.Chunks[Wadfile.Chunk("FAIL")]=null;bad.Directory[0]=entry;
+                bool failed=false;try{ScenarioMaps.SaveAtomic(bad,path);}catch{failed=true;}
+                Check(failed && System.IO.File.ReadAllBytes(path).SequenceEqual(original),"Failed save replaced original scenario");
+                Check(!System.IO.Directory.GetFiles(System.IO.Path.GetDirectoryName(path),System.IO.Path.GetFileName(path)+".*.tmp").Any(),"Failed save left temporary file");
+            } finally {System.IO.File.Delete(path);}
+        });
+        Test("Free scale stretches axes independently and carries contents with one undo", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.NewObject(P(750,250),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=90;
+            level.Annotations.Add(new Annotation{X=750,Y=250,PolygonIndex=0,Text="warp"});var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
+            string before=CanonicalSnapshot(level);editor.ButtonPress(1000,1000,EditorModifiers.None);
+            editor.Motion(1250,875,EditorModifiers.None);editor.ButtonRelease(1500,750,EditorModifiers.None);
+            Check(level.Endpoints.Contains(P(-500,250)) && level.Endpoints.Contains(P(1500,750)),"Independent factors or pivot wrong");
+            Check(level.Objects[0].X==1000 && level.Objects[0].Y==375 && level.Objects[0].Facing==90 && level.Annotations[0].X==1000 && level.Annotations[0].Y==375,"Contents failed to stretch");
+            Check(editor.HistoryLabels.Count==2,"Warp created multiple history steps");Validate(level);string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Warp undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Warp redo failed");
+        });
+        Test("Scale can toggle Shift during a drag without rounding drift", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
+            editor.ButtonPress(1000,1000,EditorModifiers.None);editor.Motion(1500,750,EditorModifiers.None);
+            var free=level.Endpoints.ToArray();editor.Motion(1500,750,EditorModifiers.Shift);
+            Check(level.Endpoints.Contains(P(-250,-250)) && level.Endpoints.Contains(P(1250,1250)),"Shift did not preserve proportions");
+            editor.Motion(1500,750,EditorModifiers.None);Check(level.Endpoints.SequenceEqual(free),"Modifier toggle accumulated drift");
+            editor.ButtonRelease(1500,750,EditorModifiers.None);Validate(level);
+        });
+        Test("Free scale preserves shared vertices and supports center-axis drags", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var original=level.Endpoints.ToArray();var editor=Editor(level);
+            editor.Selection.Polygons.UnionWith(new short[]{0,1});editor.Tool=Tool.Scale;
+            editor.ButtonPress(2000,1000,EditorModifiers.None);editor.ButtonRelease(2500,750,EditorModifiers.None);
+            for(int i=0;i<original.Length;i++)Check(level.Endpoints[i].Equals(P((short)(-500+original[i].X*1.5),(short)(250+original[i].Y*.5))),"Shared vertices stretched twice");Validate(level);
+            level=new Level();Box(level,0,0,1000,1000);editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
+            editor.ButtonPress(1000,500,EditorModifiers.None);editor.ButtonRelease(1500,750,EditorModifiers.None);
+            Check(level.Endpoints.Contains(P(-500,-250)) && level.Endpoints.Contains(P(1500,1250)),"Center-axis drag failed");Validate(level);
+        });
+        Test("Free scale rejects collisions and flipped neighbouring polygons atomically", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var editor=Editor(level);editor.Selection.Polygon=0;editor.Tool=Tool.Scale;
+            string before=CanonicalSnapshot(level);
+            foreach(short x in new short[]{2000,2500}) {
+                editor.ButtonPress(1000,1000,EditorModifiers.None);editor.ButtonRelease(x,1000,EditorModifiers.None);
+                Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Rejected warp mutated shared geometry");
+            }
+            level=new Level();short a=level.NewPoint(0,0),b=level.NewPoint(1000,0);short line=level.NewLine(a,b);level.NewPoint(1500,0);
+            editor=Editor(level);editor.Selection.Line=line;editor.Tool=Tool.Scale;before=CanonicalSnapshot(level);
+            editor.ButtonPress(1000,0,EditorModifiers.None);editor.ButtonRelease(1500,0,EditorModifiers.None);
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Warp overlapped an unselected vertex");
+        });
+        Test("Right click samples polygon paint values without moving or changing history", () => {
+            foreach(var tool in new[]{Tool.FloorHeight,Tool.CeilingHeight,Tool.Media,Tool.AmbientSound,Tool.RandomSound,Tool.PolygonType,Tool.FloorTexture,Tool.CeilingTexture,Tool.FloorLight,Tool.CeilingLight,Tool.MediaLight}) {
+                var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var source=level.Polygons[0];var target=level.Polygons[1];
+                source.FloorHeight=123;source.CeilingHeight=2345;source.MediaIndex=-1;source.AmbientSound=-1;source.RandomSound=-1;source.Type=PolygonType.Hill;
+                source.FloorTexture=(ShapeDescriptor)0x1234;source.CeilingTexture=(ShapeDescriptor)0x1543;source.FloorTransferMode=2;source.CeilingTransferMode=3;
+                source.FloorLight=3;source.CeilingLight=4;source.MediaLight=5;
+                target.MediaIndex=0;target.AmbientSound=0;target.RandomSound=0;
+                var editor=Editor(level);editor.Tool=tool;editor.Selection.Polygon=0;editor.PaintIndex=99;editor.PaintDescriptor=(ShapeDescriptor)99;editor.PaintTransferMode=0;
+                short Value(Polygon p) => tool switch {Tool.FloorHeight=>p.FloorHeight,Tool.CeilingHeight=>p.CeilingHeight,Tool.Media=>p.MediaIndex,Tool.AmbientSound=>p.AmbientSound,Tool.RandomSound=>p.RandomSound,Tool.PolygonType=>(short)p.Type,Tool.FloorLight=>p.FloorLight,Tool.CeilingLight=>p.CeilingLight,_=>p.MediaLight};
+                bool texture=tool==Tool.FloorTexture || tool==Tool.CeilingTexture;
+                var descriptor=tool==Tool.FloorTexture?source.FloorTexture:source.CeilingTexture;
+                short transfer=tool==Tool.FloorTexture?source.FloorTransferMode:source.CeilingTransferMode;
+                string before=CanonicalSnapshot(level);
+                editor.ButtonPress(250,250,EditorModifiers.RightClick);
+                Check(texture?editor.PaintDescriptor.Equals(descriptor) && editor.PaintTransferMode==transfer:editor.PaintIndex==Value(source),"Did not sample on press: "+tool);
+                editor.Motion(750,750,EditorModifiers.RightClick);editor.ButtonRelease(750,750,EditorModifiers.RightClick);
+                Check(CanonicalSnapshot(level)==before,"Sampling changed map: "+tool);
+                Check(!editor.Changed,"Sampling marked map changed: "+tool);
+                Check(editor.HistoryLabels.Count==1 && editor.Selection.Polygon==0,"Sampling changed history or selection: "+tool);
+                editor.ButtonPress(-500,-500,EditorModifiers.RightClick);editor.ButtonRelease(-500,-500,EditorModifiers.RightClick);
+                Check(texture?editor.PaintDescriptor.Equals(descriptor):editor.PaintIndex==Value(source),"Empty-space sampling reset value: "+tool);
+                editor.ButtonPress(1500,500,EditorModifiers.None);editor.ButtonRelease(1500,500,EditorModifiers.None);
+                Check(texture?(tool==Tool.FloorTexture?target.FloorTexture.Equals(descriptor) && target.FloorTransferMode==transfer:target.CeilingTexture.Equals(descriptor) && target.CeilingTransferMode==transfer):Value(target)==Value(source),"Left click failed to paint sampled value: "+tool);
+                Check(editor.HistoryLabels.Count==2,"Painting sampled value did not record undo: "+tool);
+                editor.Undo();Check(CanonicalSnapshot(level)==before,"Paint undo failed: "+tool);
+            }
         });
         Console.WriteLine(passed + " test groups passed.");
     }

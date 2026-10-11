@@ -319,7 +319,7 @@ namespace Weland
                     int alpha = resized.HasAlpha ? pixels[at+3] : 255;
                     for (int c = 0; c < 3; ++c) image.Data[output+c] = (byte)((pixels[at+c] * alpha + 127) / 255);
                 }
-                int resourceId = TerminalPictureImports.NextId(mapfile.Directory.Keys.Concat(importedPictures.Keys)
+                int resourceId = TerminalPictureImports.NextId(TerminalPictureImports.UsedIds(mapfile).Concat(importedPictures.Keys)
                     .Concat(documents.SelectMany(d=>d.Pages).Where(p=>p.Type == TerminalPageType.Picture || p.Type == TerminalPageType.Logon || p.Type == TerminalPageType.Logoff).Select(p=>(int)p.Permutation)));
                 importedPictures.Add(resourceId,TerminalPictureImports.Encode(image));
                 pictureErrors.Remove(resourceId);

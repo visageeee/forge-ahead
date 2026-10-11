@@ -9,7 +9,10 @@ namespace Weland
         public int CircleSides
         {
             get => circleSides;
-            set { circleSides = Math.Max(3, Math.Min(8, value)); }
+            set {
+                int sides = Math.Max(3, Math.Min(8, value));
+                if (sides != circleSides) { CancelCircle(); circleSides = sides; }
+            }
         }
         public bool DrawingCircle { get; private set; }
         public Point CircleStart { get; private set; }
@@ -20,6 +23,9 @@ namespace Weland
         {
             DrawingCircle = false;
             CircleVertices.Clear();
+            CircleTiles.Clear();
+            circleTilePlan = null;
+            DrawingCircleTessellation = false;
             CircleMessage = null;
             Dirty = RedrawAll = true;
         }
@@ -28,7 +34,8 @@ namespace Weland
         {
             CommitHistory();
             CancelCircle();
-            Selection.Clear();
+            if (!CircleTessellationEnabled) Selection.Clear();
+            DrawingCircleTessellation = CircleTessellationEnabled;
             CircleStart = SnapBoxPoint(X, Y);
             DrawingCircle = true;
             UpdateCircle(X, Y, false);
@@ -37,6 +44,7 @@ namespace Weland
         public void UpdateCircle(short X, short Y, bool circular)
         {
             if (!DrawingCircle) return;
+            if (DrawingCircleTessellation) { UpdateCircleTessellation(X, Y); return; }
             Point end = SnapBoxPoint(X, Y);
             int dx = end.X - CircleStart.X, dy = end.Y - CircleStart.Y;
             if (circular)
@@ -58,7 +66,9 @@ namespace Weland
                 short near = ClosestPoint(p);
                 CircleVertices.Add(near == -1 ? p : Level.Endpoints[near]);
             }
-            Level.CanCreateCirclePolygon(CircleVertices, out string reason);
+            string reason;
+            if (CircleFilled) Level.CanCreateCirclePolygon(CircleVertices, out reason);
+            else Level.PlanShapeOutline(new List<List<Point>> { CircleVertices }, out _, out _, out _, out reason);
             CircleMessage = reason;
             Dirty = RedrawAll = true;
         }
@@ -66,8 +76,15 @@ namespace Weland
         public void FinishCircle(short X, short Y, bool circular)
         {
             if (!DrawingCircle) return;
+            if (DrawingCircleTessellation) { FinishCircleTessellation(X, Y); return; }
             UpdateCircle(X, Y, circular);
             DrawingCircle = false;
+            if (!CircleFilled)
+            {
+                FinishShapeOutline(new List<List<Point>> { CircleVertices }, "Draw circle outline", out string outlineReason);
+                CircleMessage = outlineReason;
+                return;
+            }
             if (!Level.CanCreateCirclePolygon(CircleVertices, out string reason)) { CircleMessage = reason; return; }
             SetUndo();
             if (Level.CreateCirclePolygon(CircleVertices, out reason))
@@ -222,6 +239,13 @@ namespace Weland
 
         bool CreatePlainShape(List<Point> corners, out string reason)
         {
+            if (!CreateShapeBoundary(corners, out var loop, out reason)) return false;
+            return CreatePolygonFromLoop(loop,true);
+        }
+
+        bool CreateShapeBoundary(List<Point> corners, out List<short> loop, out string reason)
+        {
+            loop = new List<short>();
             if (!CanCreatePlainShape(corners, out reason)) return false;
             List<Point> ring = CircleRing(corners);
             var indexes = new List<short>();
@@ -238,7 +262,6 @@ namespace Weland
                 }
                 indexes.Add(index);
             }
-            var loop = new List<short>();
             for (int i = 0; i < indexes.Count; ++i)
             {
                 short a=indexes[i],b=indexes[(i+1)%indexes.Count],found=-1;
@@ -250,7 +273,7 @@ namespace Weland
                 }
                 loop.Add(found == -1 ? NewLine(a,b) : found);
             }
-            return CreatePolygonFromLoop(loop,true);
+            return true;
         }
     }
 }
