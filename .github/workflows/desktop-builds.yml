@@ -23,6 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-24.04
+            rid: linux-x64
           - os: windows-2022
             rid: win-x64
           - os: macos-15
@@ -54,10 +56,15 @@ jobs:
       - name: Package Mac
         if: runner.os == 'macOS'
         run: python3 packaging/macos.py '${{ matrix.rid }}'
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: bash packaging/linux.sh
       - uses: actions/upload-artifact@v4
         with:
           name: weland-se-${{ matrix.rid }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
           if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -66,6 +73,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: weland-se-*
@@ -78,6 +86,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --title "Weland SE $RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" --title "Weland SE $RELEASE_TAG" --notes-file packaging/RELEASE-NOTES.md
           fi
-          gh release upload "$RELEASE_TAG" downloads/*.zip --clobber
+          gh release upload "$RELEASE_TAG" downloads/*.zip downloads/*.tar.gz --clobber
