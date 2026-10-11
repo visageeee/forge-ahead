@@ -360,6 +360,27 @@ namespace Weland
                         }
                 }
 
+                if (Editor != null && Editor.Pasting)
+                {
+                    foreach (var edge in Editor.PastePreviewLines) drawer.DrawLine(selectedLineColor, Transform.ToScreenPoint(edge[0]), Transform.ToScreenPoint(edge[1]));
+                    foreach (var point in Editor.PastePreviewPoints) DrawFatPoint(selectedLineColor, point);
+                }
+                if (Editor != null && Editor.DrawingRing)
+                {
+                    Drawer.Color color = Editor.RingMessage == null ? selectedLineColor : invalidPolygonColor;
+                    var edges = new System.Collections.Generic.HashSet<(Point, Point)>();
+                    var vertices = new System.Collections.Generic.HashSet<Point>();
+                    foreach (var sector in Editor.RingSectors)
+                        for (int i = 0; i < sector.Count; ++i)
+                        {
+                            Point p = sector[i], q = sector[(i + 1) % sector.Count];
+                            if (p.X > q.X || (p.X == q.X && p.Y > q.Y)) { Point t = p; p = q; q = t; }
+                            if (edges.Add((p, q))) drawer.DrawLine(color, Transform.ToScreenPoint(p), Transform.ToScreenPoint(q));
+                            if (vertices.Add(p)) DrawFatPoint(color, p);
+                            if (vertices.Add(q)) DrawFatPoint(color, q);
+                        }
+                }
+
                 if (Editor != null && Editor.DrawingSelectionBox)
                 {
                     Point a = Editor.SelectionBoxStart, b = Editor.SelectionBoxEnd;

@@ -64,7 +64,7 @@ namespace Weland
         public void CommitHistory(bool force = false)
         {
             if (pendingUndo == null || (!force && (historyGesture || DrawingBox || DrawingCircle ||
-                DrawingSelectionBox || Level.TemporaryLineStartIndex != -1))) return;
+                DrawingSelectionBox || DrawingRing || Level.TemporaryLineStartIndex != -1))) return;
             HistoryState after = CaptureHistory();
             if (!SameHistoryMap(pendingUndo, after))
             {
@@ -92,7 +92,8 @@ namespace Weland
         void PrepareHistoryNavigation()
         {
             if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
-            ClearHover(); CancelBox(); CancelSelectionBox(); CancelCircle(); CancelMoveTool();
+            CancelPaste();
+            ClearHover(); CancelBox(); CancelSelectionBox(); CancelCircle(); CancelRing(); CancelMoveTool();
             CancelRotateTool();
             CancelScaleTool();
             if (Level.TemporaryLineStartIndex != -1)

@@ -67,8 +67,15 @@ namespace Weland
             args.ExitApplication = true;
         }
 
+        static void StartupTrace(string stage)
+        {
+            if (Environment.GetEnvironmentVariable("FORGE_AHEAD_STARTUP_TRACE") == "1")
+                Console.Error.WriteLine("Forge Ahead startup: " + stage);
+        }
+
         public static int Main(string[] args)
         {
+            StartupTrace("configuring runtime");
             RuntimeSetup.Configure();
             return RunGtk(args);
         }
@@ -79,22 +86,31 @@ namespace Weland
             AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(OnUnhandledException);
             GLib.ExceptionManager.UnhandledException += new GLib.UnhandledExceptionHandler(OnUnhandledException);
 
+            StartupTrace("initializing GTK");
             Application.Init();
 
-            var App = new Application("org.Weland.Weland", GLib.ApplicationFlags.None);
+            var App = new Application("io.github.visageeee.forgeahead", GLib.ApplicationFlags.None);
+            StartupTrace("registering GTK application");
             App.Register(GLib.Cancellable.Current);
+            StartupTrace("GTK application registered");
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             ShapesFile shapes = new ShapesFile();
+            StartupTrace("loading shapes");
             shapes.Load(Settings.GetSetting("ShapesFile/Path", ""));
+            StartupTrace("shapes loaded");
             Shapes = shapes;
-            MapWindow window = new MapWindow("Weland");
+            StartupTrace("creating editor window");
+            MapWindow window = new MapWindow("Forge Ahead");
+            StartupTrace("editor window created");
 
+            StartupTrace("opening map");
             if (args.Length == 1 && !args[0].StartsWith("-psn_"))
                 window.OpenFile(args[0]);
             else
                 window.NewLevel();
 
+            StartupTrace("running GTK event loop");
             Application.Run();
             return 0;
         }

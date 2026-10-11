@@ -1,7 +1,24 @@
-## Weland SE (.NET 8 / GTK 3)
+# Forge Ahead
 
-For Windows and macOS packages, automated GitHub builds, and release instructions,
-see [packaging/BUILDING.md](packaging/BUILDING.md).
+Map editor for Marathon. An expanded fork of Weland using .NET 8 and GTK 3,
+with box/circle/ring tools, insets, selection copy/paste, transforms, undo
+history, merged scenarios, terminal editing, and embedded Lua.
+
+Repository: https://github.com/visageeee/forge-ahead
+
+For Windows, macOS, and Linux packages, automated GitHub builds, and release
+instructions, see [packaging/BUILDING.md](packaging/BUILDING.md).
+
+To run from source with .NET 8 and system GTK 3:
+
+```sh
+dotnet run --project Weland.csproj
+```
+
+The source project and C# namespace retain the Weland name. Published binaries
+are named `ForgeAhead` (`ForgeAhead.exe` on Windows). Existing preferences and
+plugin folders are preserved. Plugins referencing the old assembly must be
+rebuilt against the ForgeAhead assembly.
 
 The historical instructions below describe the original GTK 2 version.
 

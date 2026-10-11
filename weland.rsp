@@ -1,4 +1,4 @@
-/out:Weland.exe
+/out:ForgeAhead.exe
 /r:Mono.Cairo
 /r:System.Web
 

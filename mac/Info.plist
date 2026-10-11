@@ -9,11 +9,11 @@
 	<key>CFBundleIconFile</key>
 	<string>Weland.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.treellama.weland</string>
+	<string>io.github.visageeee.forgeahead</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Weland</string>
+	<string>Forge Ahead</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -2225,6 +2225,21 @@
                   </packing>
                 </child>
                 <child>
+                  <object class="GtkRadioToolButton" id="ringButton">
+                    <property name="use-action-appearance">False</property>
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text" translatable="yes">Draw Ring: drag opposite corners; hold Shift for a circle</property>
+                    <property name="label" translatable="yes">Draw Ring</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="homogeneous">True</property>
+                  </packing>
+                </child>
+                <child>
                   <object class="GtkRadioToolButton" id="fillButton">
                     <property name="use-action-appearance">False</property>
                     <property name="visible">True</property>

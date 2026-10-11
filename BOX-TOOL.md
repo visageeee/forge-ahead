@@ -100,6 +100,79 @@ lines and drawing previews use the selected width; selected and preview
 vertices stay larger than ordinary vertices. Grid lines remain one pixel wide.
 These visual settings do not change geometry or selection/snap distances.
 
+## Select tool options
+
+The Select sidebar offers Select all and Deselect all. Ctrl+A selects every
+vertex, line, and polygon in the map; Ctrl+Shift+A clears the selection. Text
+fields retain their normal Ctrl+A text-selection behaviour. Selecting alone
+does not edit the map or add undo history.
+
+Mirror horizontal reflects left/right, and Flip vertical reflects top/bottom,
+around the selected geometry's bounding-box centre. Selected polygons carry
+their objects and annotations, and player/monster facings reflect too. Shared
+vertices transform once. Polygon winding and wall-side ownership are repaired
+while preserving textures and polygon settings. Reflections that overlap or
+fold existing geometry are rejected without changing the map; include connected
+neighbours when needed. Each reflection is one undo step.
+
+Shift height (WU) adds the entered amount to Floor, Ceiling, or both. Positive
+values raise and negative values lower. Explicitly selected polygons take
+priority; when only vertices/lines are selected, attached polygons are used.
+Shifts preserve textures, validate the whole selection against height limits
+and inverted floor/ceiling order, and form one undo step.
+
+## Ring tool
+
+Choose Ring beside Circle in the toolbar, then drag opposite corners. The right
+panel offers 3–128 sides (16 by default). Hold Shift to constrain the outline
+to a circle; otherwise it can be elliptical.
+
+Enable Inner rings and choose a count from 1–16. Innermost size (%) sets the
+smallest ring relative to the outer ring; intermediate rings are evenly spaced.
+Corresponding vertices connect into convex quadrilateral bands, leaving the
+centre open. For example, three inner rings with an innermost size of 25%
+produce boundaries at 75%, 50%, and 25% of the outer radius. Without Inner rings,
+sectors connect to the centre. Each drag supports at most 256 sectors, so the
+side count multiplied by the inner-ring count must be at most 256.
+
+Filled creates polygon sectors. Uncheck Filled for just the ring boundaries
+and connecting spokes, with no new polygons. An existing matching outline can
+be filled later by drawing the same ring with Filled enabled. Individual
+polygons stay below the engine's eight-vertex limit even with many outer sides.
+
+The preview shows shared spokes and boundaries without changing the map.
+Placement is checked on release: sectors share existing matching vertices and
+lines, identical sectors are reused, and overlaps or collapsed/narrow sectors
+are rejected atomically. Geometry inside the open centre is preserved. Rings
+add geometry in empty space; this tool does not inset into existing polygons.
+The complete ring is selected and creation is one undo step. Escape or changing
+the tool/options cancels the preview. Ring options are saved in preferences.
+
+## Stairs for rings and tessellation
+
+Both tools offer Stairs, Starting height (WU), Step height (WU), Ceiling height
+(WU), and Ceiling follows floor. Stairs
+requires Filled; in the Circle tool it also requires Tessellate. The starting
+height is an absolute floor height. Each next step adds the step height;
+negative values descend. The default step height is 0.125 WU. Values are stored
+at the map's 1/1024-WU precision.
+
+Ring stairs start at the top of the ring and step clockwise. Matching angular
+sectors across all concentric bands share a height. The last sector meets the
+first at the top, making a height break there for nonzero steps.
+Tessellation steps along the longer drag axis (X when tied), starting at the
+initial tile and advancing toward the drag endpoint. Tiles in the same lattice
+row or column share a height; paired triangles share a step. Octagon square
+fillers use the greater step index of their neighbouring rows/columns.
+
+Matching existing polygons also receive the specified floor and ceiling
+heights. Ceiling height is absolute: unchecked Ceiling follows floor keeps it
+fixed; checked, it adds the same step offset as the floor, retaining constant
+headroom. Textures are preserved. A floor reaching its ceiling, or a floor or
+ceiling outside the map's range, rejects the entire operation without changing
+the map. Creation and height
+changes form one undo step. Stair settings are saved independently for each tool.
+
 ## Right-button move shortcut
 
 Right-click and drag in geometry tools to move the current selection using
@@ -351,3 +424,24 @@ map and returns its changes to the scenario session.
 Saves write a complete temporary file before replacing the destination. Native
 Mac resource forks are copied when saving on macOS. External scenario assets
 such as Shapes and Sounds remain separate files.
+
+### Copy and paste selections
+
+Use **Ctrl+C** to copy selected vertices, lines, or polygons, and **Ctrl+V**
+to start placing a copy. The Select sidebar also has Copy and Paste buttons.
+Move the pointer to position the preview, then left-click to place it; Escape
+or right-click cancels. Placement snaps the selection centre to the grid when
+snapping is enabled. Copy again only when you want to replace the clipboard;
+repeated pastes use the original snapshot.
+
+Polygons include their boundary geometry, settings, wall textures, contained
+objects and annotations. Individual objects or annotations can also be copied
+and pasted inside a polygon. Shared vertices and lines are preserved and reused
+when pasting against matching existing edges. Overlapping polygons, crossing
+lines and coordinate overflow are rejected without changing the map. A paste
+selects the new geometry and adds one undo/history step.
+
+Platform settings and references between copied polygons follow their copies.
+Existing terminal, texture, light, sound and media IDs remain level-local; this
+is an internal clipboard for the current level, cleared when changing levels
+or opening another map. It does not exchange geometry with other applications.

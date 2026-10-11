@@ -12,8 +12,12 @@ namespace Weland
         // Neighbouring tiles therefore use exactly the same integer vertices.
         public static bool TryBuild(Point origin, Point end, int sides, int edgeSize,
             out List<List<Point>> tiles, out string reason)
+            => TryBuild(origin, end, sides, edgeSize, out tiles, out _, out reason);
+
+        public static bool TryBuild(Point origin, Point end, int sides, int edgeSize,
+            out List<List<Point>> tiles, out List<int> stairSteps, out string reason)
         {
-            tiles = new List<List<Point>>(); reason = null;
+            tiles = new List<List<Point>>(); stairSteps = new List<int>(); reason = null;
             if (sides != 3 && sides != 4 && sides != 6 && sides != 8)
             { reason = "Tessellation needs 3, 4, 6, or 8 sides; octagons include square fillers."; return false; }
             if (edgeSize < 16 || edgeSize > 8192)
@@ -33,7 +37,10 @@ namespace Weland
             if (sides == 8) count += (cols - 1) * (rows - 1);
             if (count > MaxTiles)
             { reason = "Drag a smaller patch or increase the size (up to 256 tiles per drag)."; return false; }
+            bool alongX = Math.Abs(end.X - origin.X) >= Math.Abs(end.Y - origin.Y);
             var result = new List<List<Point>>();
+            var steps = new List<int>();
+            int currentStep = 0;
             bool Add(int x, int y, params int[] offsets)
             {
                 var ring = new List<Point>();
@@ -44,11 +51,12 @@ namespace Weland
                         return false;
                     ring.Add(new Point((short)px, (short)py));
                 }
-                result.Add(ring); return true;
+                result.Add(ring); steps.Add(currentStep); return true;
             }
             for (int row = firstRow; row <= lastRow; ++row)
                 for (int col = firstCol; col <= lastCol; ++col)
                 {
+                    currentStep = Math.Abs(alongX ? col : row);
                     int x = origin.X + col * stepX, y = origin.Y + row * stepY;
                     bool added;
                     if (sides == 3)
@@ -71,12 +79,17 @@ namespace Weland
                         added = Add(x, y, cut,0, cut+edgeSize,0, pitch,cut, pitch,cut+edgeSize,
                             cut+edgeSize,pitch, cut,pitch, 0,cut+edgeSize, 0,cut);
                         if (added && col < lastCol && row < lastRow)
+                        {
+                            // Fillers sit between lattice steps; use the higher
+                            // step index of their neighbouring rows/columns.
+                            currentStep = alongX ? Math.Max(Math.Abs(col), Math.Abs(col+1)) : Math.Max(Math.Abs(row), Math.Abs(row+1));
                             added = Add(x+pitch, y+pitch, 0,-cut, cut,0, 0,cut, -cut,0);
+                        }
                     }
                     if (!added)
                     { reason = "The patch extends beyond the map coordinate limits."; return false; }
                 }
-            tiles = result; return true;
+            tiles = result; stairSteps = steps; return true;
         }
     }
 
@@ -143,7 +156,7 @@ namespace Weland
         {
             circleTilePlan = null;
             CircleTessellation.TryBuild(CircleStart, new Point(x,y), CircleSides, CircleTileSize,
-                out var tiles, out string reason);
+                out var tiles, out var stairSteps, out string reason);
             CircleTiles = tiles;
             if (reason == null)
             {
@@ -157,6 +170,12 @@ namespace Weland
                     circleTilesAdded = changed ? 1 : 0;
                 }
             }
+            if (circleTilePlan != null && CircleFilled && CircleStairs)
+            {
+                if (!ApplyStairHeights(circleTilePlan, circleTileSelection, stairSteps,
+                    CircleStairStart, CircleStairStep, CircleStairCeiling, CircleCeilingFollows, out bool changed, out reason)) circleTilePlan = null;
+                else if (changed) circleTilesAdded = Math.Max(1, circleTilesAdded);
+            }
             CircleMessage = reason;
             Dirty = RedrawAll = true;
         }
@@ -168,7 +187,7 @@ namespace Weland
             if (circleTilePlan == null) return;
             if (circleTilesAdded > 0)
             {
-                SetUndo(CircleFilled ? "Tessellate polygons" : "Tessellate outlines");
+                SetUndo(CircleFilled ? (CircleStairs ? "Tessellate stairs" : "Tessellate polygons") : "Tessellate outlines");
                 Level.Load(circleTilePlan.Save().Clone());
                 Changed = true;
             }

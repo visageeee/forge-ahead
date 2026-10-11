@@ -1,4 +1,4 @@
-# Weland SE desktop packages
+# Forge Ahead desktop packages
 
 `.github/workflows/desktop-builds.yml` tests the editor geometry and builds Windows
 x64, Linux x64, macOS Apple Silicon, and macOS Intel packages. It runs on pushes and pull
@@ -6,18 +6,18 @@ requests to `weland-gtk3`, tags beginning with `v`, and manual dispatches.
 
 ## Download a development build
 
-Push this change to your fork, then open **Actions → Build Weland SE desktops**.
+Push this change to your fork, then open **Actions → Build Forge Ahead desktops**.
 Select the completed run and download the appropriate artifact. GitHub wraps
-artifacts in an extra ZIP: extract it, then extract the Weland archive inside.
+artifacts in an extra ZIP: extract it, then extract the Forge Ahead archive inside.
 
-Windows: open `Weland-SE-win-x64/Weland.exe`. Keep the complete folder together.
-Mac: drag `Weland SE.app` into Applications. The first packages are ad-hoc signed,
+Windows: open `Forge-Ahead-win-x64/ForgeAhead.exe`. Keep the complete folder together.
+Mac: drag `Forge Ahead.app` into Applications. The first packages are ad-hoc signed,
 not Apple-notarized; macOS may require approval in System Settings → Privacy &
 Security after the first launch attempt. Do not disable Gatekeeper globally.
 Windows and Mac packages include .NET 8 and GTK 3; no separate runtime
 installation is needed.
 
-Linux: extract `Weland-SE-linux-x64.tar.gz` and run `Start-Weland-SE.sh`.
+Linux: extract `Forge-Ahead-linux-x64.tar.gz` and run `Start-Forge-Ahead.sh`.
 The Linux package includes .NET 8 and uses system GTK 3. On Ubuntu 24.04:
 
 ```sh

@@ -902,14 +902,14 @@ class BoxToolTests
             Check(Snapshot(level)==before && !editor.Changed,"Empty Move changed map");
         });
         Test("right drag moves selection with geometry tools and ends on release", () => {
-            foreach (Tool tool in new[] {Tool.Select, Tool.Pan, Tool.Zoom, Tool.Box, Tool.Circle}) {
+            foreach (Tool tool in new[] {Tool.Select, Tool.Pan, Tool.Zoom, Tool.Box, Tool.Circle, Tool.Ring}) {
                 var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=tool;editor.Selection.Point=0;
                 editor.ButtonPress(500,500,EditorModifiers.RightClick);
                 editor.Motion(520,530,EditorModifiers.RightClick);
                 editor.ButtonRelease(525,535,EditorModifiers.RightClick);
                 Check(editor.Tool==tool && editor.Selection.Point==0 && level.Endpoints[0].Equals(P(25,35)),"Right drag changed tool/selection or failed to move");
                 editor.Undo();Check(level.Endpoints[0].Equals(P(0,0)),"Right drag did not undo as one action");
-                Check(!editor.DrawingBox && !editor.DrawingCircle,"Right drag started drawing");
+                Check(!editor.DrawingBox && !editor.DrawingCircle && !editor.DrawingRing,"Right drag started drawing");
             }
         });
         Test("right drag moves selected objects and empty drags do nothing", () => {
@@ -1613,12 +1613,280 @@ class BoxToolTests
                 Weland.Weland.Settings=new Settings(false);
                 var editor=Editor(new Level());
                 Check(editor.BoxFilled && editor.CircleFilled && !editor.CircleTessellationEnabled && editor.CircleSides==8,"Isolated defaults wrong");
-                editor.BoxFilled=false;editor.CircleFilled=false;editor.CircleTessellationEnabled=true;editor.CircleSides=6;editor.CircleTileSize=512;editor.SaveSettings();
+                editor.BoxFilled=false;editor.CircleFilled=false;editor.CircleTessellationEnabled=true;editor.CircleSides=6;editor.CircleTileSize=512;
+                editor.RingSides=32;editor.RingHasInner=false;editor.RingInnerPercent=75;editor.RingInnerCount=4;editor.RingFilled=false;editor.SaveSettings();
                 var loaded=Editor(new Level());
                 Check(!loaded.BoxFilled && !loaded.CircleFilled && loaded.CircleTessellationEnabled && loaded.CircleSides==6 && loaded.CircleTileSize==512,"In-memory settings failed to round trip");
+                Check(loaded.RingSides==32 && !loaded.RingHasInner && loaded.RingInnerPercent==75 && loaded.RingInnerCount==4 && !loaded.RingFilled,"Ring settings failed to round trip");
                 Weland.Weland.Settings=new Settings(false);
                 var clean=Editor(new Level());Check(clean.BoxFilled && clean.CircleFilled && !clean.CircleTessellationEnabled,"Fresh test settings inherited earlier choices");
             } finally {Weland.Weland.Settings=original;}
+        });
+        Test("Ring sectors beyond eight sides are convex connected and preserve their hole", () => {
+            foreach(int sides in new[]{3,9,16,64,128}) foreach(int inner in new[]{0,25,75}) {
+                Check(RingGeometry.TryBuild(P(-8000,-6000),P(8000,6000),sides,inner,out var sectors,out string reason),reason);
+                Check(sectors.Count==sides && sectors.All(p=>p.Count==(inner==0?3:4)),"Wrong sector count or size");
+                var level=new Level();Check(level.PlanCircleTessellation(sectors,out var plan,out var selected,out int added,out reason),reason);
+                Check(added==sides && selected.Count==sides,"Missing sectors");Validate(plan);
+                Check(plan.Endpoints.Count==(inner==0?sides+1:2*sides) && plan.Lines.Count==(inner==0?2*sides:3*sides),"Duplicate shared vertices or edges");
+                Check(plan.Lines.Count(l=>l.ClockwisePolygonOwner!=-1 && l.CounterclockwisePolygonOwner!=-1)==sides,"Spokes do not connect sectors");
+                Check((plan.GetEnclosingPolygon(P(0,0))==-1)==(inner>0),"Ring hole was filled or disk left empty");
+                long expected=0;foreach(var sector in sectors)for(int i=0;i<sector.Count;i++){var a=sector[i];var b=sector[(i+1)%sector.Count];expected+=(long)a.X*b.Y-(long)b.X*a.Y;}
+                Check(Area2(plan)==expected,"Sector areas changed during creation");
+                var loaded=new Level();loaded.Load(plan.Save().Clone());Validate(loaded);Check(Area2(loaded)==expected,"Ring changed on save/load");
+            }
+        });
+        Test("Ring drag previews atomically records one undo and reuses identical sectors", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Ring;editor.RingSides=16;editor.RingInnerPercent=50;
+            string before=CanonicalSnapshot(level);editor.ButtonPress(0,0,EditorModifiers.None);editor.Motion(4000,2000,EditorModifiers.None);
+            Check(level.Polygons.Count==0 && editor.DrawingRing && editor.RingSectors.Count==16,"Ring preview changed map");
+            editor.ButtonRelease(4000,2000,EditorModifiers.Shift);
+            Check(level.Polygons.Count==16 && editor.Selection.Polygons.Count==16 && editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Draw ring","Ring not one selected undo group");
+            Check(level.Endpoints.Max(p=>p.Y)==4000,"Shift did not constrain ring");Validate(level);string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Ring undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Ring redo failed");
+            editor.ButtonPress(4000,4000,EditorModifiers.None);editor.ButtonRelease(0,0,EditorModifiers.None);
+            Check(CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==2 && editor.Selection.Polygons.Count==16,"Repeated reverse ring duplicated geometry");
+            editor.ButtonPress(-8000,-8000,EditorModifiers.None);editor.Motion(-4000,-4000,EditorModifiers.None);editor.Tool=Tool.Select;
+            Check(!editor.DrawingRing && CanonicalSnapshot(level)==after,"Tool switch left a ring preview or changed map");
+        });
+        Test("Ring placement preserves hole contents rejects overlaps and cancelled tiny rings", () => {
+            var level=new Level();Box(level,1900,1900,2100,2100);var editor=Editor(level);editor.Tool=Tool.Ring;editor.RingSides=12;
+            editor.StartRing(0,0);editor.FinishRing(4000,4000,false);
+            Check(editor.RingMessage==null && level.Polygons.Count==13 && level.GetEnclosingPolygon(P(2000,2000))==0,"Ring did not preserve geometry in its hole");Validate(level);
+            level=new Level();Box(level,0,0,4000,4000);editor=Editor(level);editor.Tool=Tool.Ring;string before=CanonicalSnapshot(level);
+            editor.StartRing(0,0);editor.FinishRing(4000,4000,false);
+            Check(editor.RingMessage!=null && CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Overlap partially created a ring");
+            editor.StartRing(5000,5000);editor.UpdateRing(8000,8000,false);editor.RingInnerPercent=60;
+            Check(!editor.DrawingRing && editor.RingSectors.Count==0,"Option change left stale preview");
+            editor.RingSides=128;editor.StartRing(5000,5000);editor.FinishRing(5002,5002,false);
+            Check(editor.RingMessage!=null && CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Tiny ring duplicated vertices");
+            editor.RingSides=16;editor.RingHasInner=false;editor.StartRing(5000,5000);editor.FinishRing(9000,9000,false);
+            Check(editor.RingMessage==null && level.Polygons.Count==17 && level.GetEnclosingPolygon(P(7000,7000))!=-1,"Filled ring failed");Validate(level);
+        });
+        Test("Multiple concentric ring bands share spokes and leave one hole", () => {
+            foreach(int count in new[]{2,3,8,16}) {
+                int sides=16;
+                Check(RingGeometry.TryBuild(P(0,0),P(16000,16000),sides,count,25,out var sectors,out string reason),reason);
+                var level=new Level();Check(level.PlanCircleTessellation(sectors,out var plan,out _,out int added,out reason),reason);
+                Check(added==sides*count && plan.Endpoints.Count==(count+1)*sides && plan.Lines.Count==(2*count+1)*sides,"Concentric topology duplicated geometry");
+                Check(plan.Endpoints.Count-plan.Lines.Count+plan.Polygons.Count==0 && plan.GetEnclosingPolygon(P(8000,8000))==-1,"Bands filled or divided the central hole");
+                Validate(plan);
+                Check(plan.Endpoints.Contains(P(8000,6000)),"Innermost size changed");
+                if(count==3)Check(plan.Endpoints.Contains(P(8000,2000)) && plan.Endpoints.Contains(P(8000,4000)),"Intermediate rings not evenly spaced");
+                var loaded=new Level();loaded.Load(plan.Save().Clone());Validate(loaded);Check(Area2(loaded)==Area2(plan),"Bands changed on save");
+            }
+            Check(!RingGeometry.TryBuild(P(0,0),P(16000,16000),128,3,25,out _,out _),"Sector limit ignored");
+        });
+        Test("Multi ring outline creates only shared lines with undo and can be filled later", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Ring;editor.RingSides=12;editor.RingInnerCount=3;editor.RingInnerPercent=25;editor.RingFilled=false;
+            string before=CanonicalSnapshot(level);editor.StartRing(0,0);editor.FinishRing(8000,8000,false);
+            Check(editor.RingMessage==null && level.Polygons.Count==0 && level.Endpoints.Count==48 && level.Lines.Count==84 && editor.Selection.Lines.Count==84,"Outline created polygons or duplicate edges");Validate(level);
+            Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Draw ring outline","Outline not one undo step");string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Multi outline undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Multi outline redo failed");
+            editor.StartRing(0,0);editor.FinishRing(8000,8000,false);Check(CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==2,"Repeated outline added geometry/history");
+            editor.RingFilled=true;editor.StartRing(0,0);editor.FinishRing(8000,8000,false);
+            Check(editor.RingMessage==null && level.Polygons.Count==36 && level.Endpoints.Count==48 && level.Lines.Count==84 && editor.Selection.Polygons.Count==36,"Filled bands did not reuse outline");Validate(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==after,"Fill undo did not retain outline");
+            editor.StartRing(10000,0);editor.UpdateRing(16000,6000,false);editor.RingInnerCount=2;Check(!editor.DrawingRing,"Count change kept stale preview");
+            editor.StartRing(10000,0);editor.UpdateRing(16000,6000,false);editor.RingFilled=false;Check(!editor.DrawingRing,"Filled change kept stale preview");
+        });
+        Test("Ring stairs step clockwise with fixed ceilings and undo reused height changes", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Ring;editor.RingSides=12;editor.RingInnerCount=3;editor.RingStairs=true;editor.RingStairStart=-256;editor.RingStairStep=64;
+            string before=CanonicalSnapshot(level);editor.StartRing(0,0);editor.FinishRing(8000,8000,false);
+            Check(editor.RingMessage==null && level.Polygons.Count==36,"Ring stairs failed");
+            for(int i=0;i<36;i++)Check(level.Polygons[i].FloorHeight==-256+(i%12)*64 && level.Polygons[i].CeilingHeight==1024,"Wrong ring band heights or changed ceiling");
+            Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Draw ring stairs","Stair ring not one undo step");string after=CanonicalSnapshot(level);
+            editor.Undo();Check(CanonicalSnapshot(level)==before,"Ring stair undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Ring stair redo failed");Validate(level);
+            editor.RingStairStart=0;editor.RingStairStep=64;editor.StartRing(0,0);editor.FinishRing(8000,8000,false);
+            Check(level.Polygons.Count==36 && level.Polygons[32].FloorHeight==512 && editor.HistoryLabels.Count==3,"Reused ring did not update heights");
+            editor.Undo();Check(CanonicalSnapshot(level)==after,"Reused ring stair undo failed");
+            editor.RingStairStep=short.MaxValue;editor.StartRing(10000,0);editor.FinishRing(18000,8000,false);
+            Check(editor.RingMessage!=null && CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==3,"Invalid ring stair partially edited map");
+            editor.RingStairStart=1024;editor.RingStairStep=0;editor.StartRing(10000,0);editor.FinishRing(18000,8000,false);
+            Check(editor.RingMessage!=null && CanonicalSnapshot(level)==after,"Stair floor exceeded ceiling");
+        });
+        Test("Tessellation stairs follow drag axis and direction for every supported tile", () => {
+            foreach(int sides in new[]{3,4,6,8}) foreach(var end in new[]{P(900,400),P(-900,-400),P(400,900),P(-400,-900)}) {
+                var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=sides;editor.CircleTileSize=256;editor.CircleTessellationEnabled=true;
+                editor.CircleStairs=true;editor.CircleStairStart=-512;editor.CircleStairStep=64;
+                Check(CircleTessellation.TryBuild(P(0,0),end,sides,256,out var tiles,out var steps,out string reason),reason);
+                Check(steps.Count==tiles.Count && steps.Min()==0 && steps.Max()>0,"Missing tessellation step levels");
+                editor.StartCircle(0,0);editor.FinishCircle(end.X,end.Y,false);
+                Check(editor.CircleMessage==null && level.Polygons.Count==tiles.Count,"Tessellation stairs failed");
+                for(int i=0;i<tiles.Count;i++)Check(level.Polygons[i].FloorHeight==-512+steps[i]*64 && level.Polygons[i].CeilingHeight==1024,"Wrong tessellation step height");
+                Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Tessellate stairs","Tile stairs not one undo");Validate(level);
+                string after=CanonicalSnapshot(level);editor.Undo();Check(level.Polygons.Count==0,"Tessellation stairs undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Tessellation stairs redo failed");
+            }
+            var squares=new Level();var squareEditor=Editor(squares);squareEditor.Tool=Tool.Circle;squareEditor.CircleSides=4;squareEditor.CircleTileSize=1000;squareEditor.CircleTessellationEnabled=true;squareEditor.CircleStairs=true;squareEditor.CircleStairStart=0;squareEditor.CircleStairStep=-128;
+            squareEditor.StartCircle(0,0);squareEditor.FinishCircle(2500,1000,false);
+            Check(squares.Polygons[0].FloorHeight==0 && squares.Polygons[1].FloorHeight==-128 && squares.Polygons[2].FloorHeight==-256 && squares.Polygons[3].FloorHeight==0,"Square rows did not share descending heights");
+            string before=CanonicalSnapshot(squares);squareEditor.CircleStairStart=900;squareEditor.CircleStairStep=128;squareEditor.StartCircle(0,0);squareEditor.FinishCircle(2500,1000,false);
+            Check(squareEditor.CircleMessage!=null && CanonicalSnapshot(squares)==before,"Invalid tessellation stairs changed reused floors");
+        });
+        Test("Stair options persist cancel previews and leave outlines without floors", () => {
+            var settings=Weland.Weland.Settings;
+            try {
+                Weland.Weland.Settings=new Settings(false);var level=new Level();var editor=Editor(level);
+                editor.RingStairs=true;editor.RingStairStart=-1024;editor.RingStairStep=-256;editor.CircleStairs=true;editor.CircleStairStart=-2048;editor.CircleStairStep=64;editor.RingStairCeiling=4096;editor.RingCeilingFollows=true;editor.CircleStairCeiling=5120;editor.CircleCeilingFollows=true;editor.SaveSettings();
+                var loaded=Editor(new Level());Check(loaded.RingStairs && loaded.RingStairStart==-1024 && loaded.RingStairStep==-256 && loaded.CircleStairs && loaded.CircleStairStart==-2048 && loaded.CircleStairStep==64 && loaded.RingStairCeiling==4096 && loaded.RingCeilingFollows && loaded.CircleStairCeiling==5120 && loaded.CircleCeilingFollows,"Stair settings not saved");
+                editor.Tool=Tool.Ring;editor.StartRing(0,0);editor.UpdateRing(4000,4000,false);editor.RingStairStart=0;Check(!editor.DrawingRing,"Ring stair setting left stale preview");
+                editor.RingFilled=false;editor.RingStairStart=short.MaxValue;editor.StartRing(0,0);editor.FinishRing(4000,4000,false);Check(editor.RingMessage==null && level.Polygons.Count==0 && level.Lines.Count>0,"Ring outline applied stairs");
+                level=new Level();editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=4;editor.CircleTessellationEnabled=true;editor.StartCircle(0,0);editor.UpdateCircle(2000,2000,false);editor.CircleStairStep=128;Check(!editor.DrawingCircle,"Tile stair setting left stale preview");
+                editor.CircleFilled=false;editor.CircleStairStart=short.MaxValue;editor.StartCircle(0,0);editor.FinishCircle(2000,2000,false);Check(editor.CircleMessage==null && level.Polygons.Count==0 && level.Lines.Count>0,"Tile outline applied stairs");
+            } finally {Weland.Weland.Settings=settings;}
+        });
+        Test("Clockwise ring stairs share angular heights across bands and ceilings follow floors", () => {
+            foreach(short step in new short[]{256,-256}) {
+                var level=new Level();var editor=Editor(level);editor.Tool=Tool.Ring;editor.RingSides=12;editor.RingInnerCount=2;
+                editor.RingStairs=true;editor.RingStairStart=-512;editor.RingStairStep=step;editor.RingStairCeiling=1536;editor.RingCeilingFollows=true;
+                string before=CanonicalSnapshot(level);editor.StartRing(0,0);editor.FinishRing(8000,8000,false);
+                Check(editor.RingMessage==null && level.Polygons.Count==24,"Following ceiling ring failed");
+                for(int band=0;band<2;band++)for(int sector=0;sector<12;sector++) {
+                    var p=level.Polygons[band*12+sector];
+                    Check(p.FloorHeight==-512+sector*step && p.CeilingHeight==1536+sector*step && p.CeilingHeight-p.FloorHeight==2048,"Clockwise ring or headroom wrong");
+                }
+                // First sector lies clockwise of the top vertex; the opposite
+                // angular sector has advanced six steps, regardless of band.
+                Check(level.Endpoints.Contains(P(4000,0)) && level.Polygons[6].FloorHeight==-512+6*step,"Ring stair origin moved");
+                Validate(level);string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Following ceiling ring undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Following ceiling ring redo failed");
+                editor.StartRing(-8000,-8000);editor.UpdateRing(-4000,-4000,false);editor.RingCeilingFollows=false;Check(!editor.DrawingRing,"Ceiling checkbox kept stale preview");
+            }
+        });
+        Test("Tessellated ceilings stay fixed or follow floor steps with undo on reused polygons", () => {
+            var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleSides=4;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;
+            editor.CircleStairs=true;editor.CircleStairStart=2048;editor.CircleStairStep=256;editor.CircleStairCeiling=4096;
+            editor.StartCircle(0,0);editor.FinishCircle(2500,0,false);
+            Check(editor.CircleMessage==null && level.Polygons.Count==3,"Fixed ceiling stairs failed");
+            for(int i=0;i<3;i++)Check(level.Polygons[i].FloorHeight==2048+256*i && level.Polygons[i].CeilingHeight==4096,"Fixed ceiling changed");
+            string before=CanonicalSnapshot(level);editor.CircleCeilingFollows=true;editor.StartCircle(0,0);editor.FinishCircle(2500,0,false);
+            for(int i=0;i<3;i++)Check(level.Polygons[i].CeilingHeight==4096+256*i && level.Polygons[i].CeilingHeight-level.Polygons[i].FloorHeight==2048,"Following ceiling changed clearance");
+            Check(editor.HistoryLabels.Count==3,"Ceiling-only changes to reused tiles lacked undo");editor.Undo();Check(CanonicalSnapshot(level)==before,"Ceiling-only undo failed");
+            editor.CircleStairStart=32700;editor.CircleStairCeiling=32760;editor.CircleStairStep=64;editor.StartCircle(0,0);editor.FinishCircle(2500,0,false);
+            Check(editor.CircleMessage!=null && CanonicalSnapshot(level)==before,"Following ceiling overflow partially changed reused tiles");
+            editor.CircleStairStart=2048;editor.CircleStairCeiling=2048;editor.CircleStairStep=0;editor.StartCircle(0,0);editor.FinishCircle(2500,0,false);
+            Check(editor.CircleMessage!=null && CanonicalSnapshot(level)==before,"Zero clearance accepted");
+            editor.StartCircle(-4000,0);editor.UpdateCircle(-2000,0,false);editor.CircleStairCeiling=5120;Check(!editor.DrawingCircle,"Ceiling field kept stale preview");
+        });
+        Test("Select all and deselect preserve geometry and create no history", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.NewPoint(2000,2000);var editor=Editor(level);editor.Tool=Tool.Select;
+            string before=CanonicalSnapshot(level);editor.SelectAllGeometry();
+            Check(editor.Selection.Points.Count==level.Endpoints.Count && editor.Selection.Lines.Count==level.Lines.Count && editor.Selection.Polygons.Count==level.Polygons.Count,"Select all missed geometry");
+            editor.DeselectAllGeometry();Check(!editor.Selection.HasMultipleGeometry && editor.Selection.Polygon==-1 && editor.Selection.Point==-1,"Deselect all kept geometry");
+            Check(!editor.Changed && editor.HistoryLabels.Count==1 && CanonicalSnapshot(level)==before,"Selection commands edited map/history");
+        });
+        Test("Mirror and flip preserve shared topology wall textures contents and undo", () => {
+            foreach(bool horizontal in new[]{true,false}) {
+                var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);level.Polygons[0].FloorHeight=-128;level.Pave();
+                for(int i=0;i<level.Sides.Count;i++)level.Sides[i].Primary.Texture=(ShapeDescriptor)(100+i);
+                level.NewObject(P(200,300),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=30;
+                level.Annotations.Add(new Annotation{X=200,Y=300,PolygonIndex=0,Text="mirror"});
+                var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});string before=CanonicalSnapshot(level);
+                var textures=level.Sides.Select(s=>s.Primary.Texture).ToArray();
+                Check(editor.MirrorSelectedGeometry(horizontal,out string reason),reason);Validate(level);
+                Check(level.Objects[0].X==(horizontal?1800:200) && level.Objects[0].Y==(horizontal?300:700) && Math.Abs(level.Objects[0].Facing-(horizontal?150:330))<1,"Reflection lost contents or facing");
+                Check(level.Annotations[0].X==level.Objects[0].X && level.Annotations[0].Y==level.Objects[0].Y && level.Objects[0].PolygonIndex==0,"Reflection lost annotation/owner");
+                Check(level.Sides.Select(s=>s.Primary.Texture).SequenceEqual(textures) && level.Polygons[0].FloorHeight==-128,"Reflection reset textures or heights");
+                for(int i=0;i<level.Polygons.Count;i++)for(int edge=0;edge<level.Polygons[i].VertexCount;edge++) {
+                    var p=level.Polygons[i];var line=level.Lines[p.LineIndexes[edge]];
+                    Check((line.ClockwisePolygonOwner==i)==(line.EndpointIndexes[1]==p.EndpointIndexes[edge]),"Reflection winding or ownership wrong");
+                }
+                Check(editor.HistoryLabels.Count==2 && editor.Selection.Polygons.Count==2,"Reflection changed selection or history");string after=CanonicalSnapshot(level);
+                editor.Undo();Check(CanonicalSnapshot(level)==before,"Reflection undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Reflection redo failed");
+                Check(editor.MirrorSelectedGeometry(horizontal,out reason),reason);Check(CanonicalSnapshot(level)==before,"Double reflection did not restore map");Validate(level);
+            }
+        });
+        Test("Reflection rejects overlapping neighbours atomically and handles lines", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygon=0;
+            string before=CanonicalSnapshot(level);Check(!editor.MirrorSelectedGeometry(true,out string reason) && reason!=null && CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Attached mirror duplicated vertices");
+            level=new Level();Box(level,0,0,500,1000);Box(level,3000,0,4000,1000);Box(level,600,0,900,1000);editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});before=CanonicalSnapshot(level);
+            Check(!editor.MirrorSelectedGeometry(true,out reason) && CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Mirror overlapped unrelated geometry");
+            level=new Level();short a=level.NewPoint(0,0),b=level.NewPoint(1000,500);short line=level.NewLine(a,b);editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Line=line;
+            Check(editor.MirrorSelectedGeometry(true,out reason) && level.Endpoints[a].Equals(P(1000,0)) && level.Endpoints[b].Equals(P(0,500)),"Selected line mirror failed");
+            level=new Level();a=level.NewPoint(100,0);b=level.NewPoint(100,500);line=level.NewLine(a,b);editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Line=line;
+            Check(editor.MirrorSelectedGeometry(true,out reason) && !editor.Changed && editor.HistoryLabels.Count==1,"Identity reflection marked map changed");
+        });
+        Test("Shift height handles floor ceiling both attached geometry and atomic limits", () => {
+            foreach(var targets in new[]{(true,false),(false,true),(true,true)}) {
+                var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygon=0;
+                level.Polygons[0].FloorTexture=(ShapeDescriptor)123;string before=CanonicalSnapshot(level);
+                Check(editor.ShiftSelectedHeights(128,targets.Item1,targets.Item2,out string reason),reason);
+                Check(level.Polygons[0].FloorHeight==(targets.Item1?128:0) && level.Polygons[0].CeilingHeight==(targets.Item2?1152:1024) && level.Polygons[1].FloorHeight==0 && level.Polygons[1].CeilingHeight==1024 && level.Polygons[0].FloorTexture.Equals((ShapeDescriptor)123),"Height shift targets/settings wrong");
+                Check(editor.HistoryLabels.Count==2,"Height shift not one history step");string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Height shift undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Height shift redo failed");
+            }
+            var attached=new Level();Box(attached,0,0,1000,1000);Box(attached,1000,0,2000,1000);var e=Editor(attached);e.Tool=Tool.Select;e.Selection.Line=(short)attached.Lines.FindIndex(l=>l.ClockwisePolygonOwner!=-1 && l.CounterclockwisePolygonOwner!=-1);
+            Check(e.ShiftSelectedHeights(-256,true,true,out string error),error);Check(attached.Polygons.All(p=>p.FloorHeight==-256 && p.CeilingHeight==768),"Selected shared line missed attached heights");
+            string snapshot=CanonicalSnapshot(attached);int count=e.HistoryLabels.Count;
+            Check(!e.ShiftSelectedHeights(32768,false,true,out error) && !e.ShiftSelectedHeights(2048,true,false,out error) && CanonicalSnapshot(attached)==snapshot && e.HistoryLabels.Count==count,"Invalid height shift partially changed map");
+            Check(!e.ShiftSelectedHeights(128,false,false,out error),"No targets accepted");e.DeselectAllGeometry();Check(!e.ShiftSelectedHeights(128,true,true,out error),"Empty shift accepted");
+        });
+        Test("Clipboard copies shared polygons textures contents and one undo step", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);level.Polygons[0].FloorHeight=-128;level.Pave();
+            level.Polygons[0].FloorTexture=(ShapeDescriptor)123;level.Polygons[1].CeilingTexture=(ShapeDescriptor)456;
+            for(int i=0;i<level.Sides.Count;i++)level.Sides[i].Primary.Texture=(ShapeDescriptor)(100+i);
+            level.NewObject(P(200,300),0);level.Objects[0].Type=ObjectType.Player;level.Objects[0].Facing=30;
+            level.Annotations.Add(new Annotation{X=1200,Y=300,PolygonIndex=1,Text="copy"});
+            var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});string before=CanonicalSnapshot(level);
+            Check(editor.CopySelection(out string reason),reason);Check(editor.BeginPaste(out reason),reason);
+            editor.MovePaste(5000,5000);Check(editor.PastePreviewLines.Count()==7 && editor.PastePreviewPoints.Count()==8,"Preview missed geometry/contents");
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Copy/preview changed map/history");
+            Check(editor.PasteSelection(5000,5000,out reason),reason);Validate(level);
+            Check(level.Polygons.Count==4 && level.Endpoints.Count==12 && level.Lines.Count==14,"Clipboard duplicated shared vertices/lines");
+            Check(level.Polygons[2].FloorHeight==-128 && level.Polygons[2].FloorTexture.Equals((ShapeDescriptor)123) && level.Polygons[3].CeilingTexture.Equals((ShapeDescriptor)456),"Polygon settings lost");
+            Check(level.Sides.Skip(7).Select(x=>x.Primary.Texture).SequenceEqual(level.Sides.Take(7).Select(x=>x.Primary.Texture)),"Wall textures lost");
+            Check(level.Objects[1].X==4200 && level.Objects[1].Y==4800 && level.Objects[1].PolygonIndex==2 && level.Objects[1].Facing==level.Objects[0].Facing,"Object not copied/remapped");
+            Check(level.Annotations[1].X==5200 && level.Annotations[1].PolygonIndex==3 && level.Annotations[1].Text=="copy","Note not copied/remapped");
+            Check(editor.HistoryLabels.Count==2 && editor.Selection.Polygons.SetEquals(new short[]{2,3}) && !editor.Pasting,"Paste history/selection wrong");
+            string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Paste undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Paste redo failed");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Objects.Count==2 && loaded.Annotations.Count==2,"Paste save/load lost contents");
+        });
+        Test("Clipboard snapshots survive edits repeat paste and reuse adjacent edges", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygon=0;
+            level.Polygons[0].FloorHeight=128;Check(editor.CopySelection(out string reason),reason);level.Polygons[0].FloorHeight=256;
+            Check(editor.PasteSelection(1500,500,out reason),reason);Validate(level);
+            Check(level.Endpoints.Count==6 && level.Lines.Count==7 && level.Polygons[1].FloorHeight==128,"Adjacent paste failed reuse or snapshot");
+            Check(editor.PasteSelection(2500,500,out reason),reason);Validate(level);Check(level.Polygons.Count==3 && level.Endpoints.Count==8 && level.Lines.Count==10,"Repeat paste lost original clipboard");
+            string before=CanonicalSnapshot(level);int history=editor.HistoryLabels.Count;
+            Check(!editor.PasteSelection(500,500,out reason) && !editor.PasteSelection(1000,500,out reason),"Overlap accepted");
+            Check(!editor.PasteSelection(32760,500,out reason),"Coordinate overflow accepted");
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==history,"Failed paste changed map/history");
+            Check(editor.BeginPaste(out reason),reason);editor.CancelPaste();Check(!editor.Pasting && CanonicalSnapshot(level)==before,"Cancel changed map");
+        });
+        Test("Clipboard supports individual vertices lines objects and annotations", () => {
+            var level=new Level();Box(level,0,0,1000,1000);level.NewObject(P(200,200),0);level.Annotations.Add(new Annotation{X=200,Y=200,PolygonIndex=0,Text="note"});
+            var editor=Editor(level);editor.Tool=Tool.Select;
+            Check(!editor.CopySelection(out string reason) && !editor.BeginPaste(out reason),"Empty clipboard accepted");
+            editor.Selection.Object=0;Check(editor.CopySelection(out reason) && editor.PasteSelection(400,400,out reason),reason);
+            Check(level.Objects.Count==2 && level.Objects[1].PolygonIndex==0 && level.Objects[1].X==400 && editor.Selection.Object==1,"Single object copy failed");
+            editor.Selection.Clear();editor.Selection.Annotation=0;Check(editor.CopySelection(out reason) && editor.PasteSelection(600,600,out reason),reason);
+            Check(level.Annotations.Count==2 && level.Annotations[1].PolygonIndex==0,"Single note copy failed");
+            editor.Selection.Clear();editor.Selection.Line=0;Check(editor.CopySelection(out reason),reason);Check(editor.PasteSelection(3000,3000,out reason),reason);
+            Check(editor.Selection.Lines.Count==1 && editor.Selection.Points.Count==2 && level.Polygons.Count==1,"Line copy made a polygon");Validate(level);
+            editor.Selection.Clear();editor.Selection.Point=0;Check(editor.CopySelection(out reason) && editor.PasteSelection(-3000,-3000,out reason),reason);Validate(level);
+            int count=editor.HistoryLabels.Count;string before=CanonicalSnapshot(level);Check(!editor.PasteSelection(-3000,-3000,out reason),"Duplicate vertex paste accepted");
+            Check(CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==count,"Duplicate vertex paste changed history");
+            editor.Selection.Clear();editor.Selection.Object=0;Check(editor.CopySelection(out reason),reason);Check(!editor.PasteSelection(-5000,-5000,out reason),"Object outside polygon accepted");
+            editor.ClearClipboard();Check(!editor.BeginPaste(out reason),"Cleared clipboard retained data");
+        });
+        Test("Clipboard mouse placement cancels and does not start a selection drag", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygon=0;
+            Check(editor.CopySelection(out string reason) && editor.BeginPaste(out reason),reason);
+            editor.ButtonPress(5000,5000,EditorModifiers.None);editor.Motion(6000,6000,EditorModifiers.None);editor.ButtonRelease(6000,6000,EditorModifiers.None);
+            Check(level.Polygons.Count==2 && !editor.DrawingSelectionBox && editor.Selection.Polygons.Contains(1),"Placement leaked into selection gesture");
+            string before=CanonicalSnapshot(level);Check(editor.BeginPaste(out reason),reason);editor.ButtonPress(7000,7000,EditorModifiers.RightClick);editor.ButtonRelease(7000,7000,EditorModifiers.RightClick);
+            Check(!editor.Pasting && CanonicalSnapshot(level)==before,"Right click changed map instead of cancelling");
+            Check(editor.BeginPaste(out reason),reason);editor.Tool=Tool.Line;Check(!editor.Pasting,"Tool switch retained paste preview");
+        });
+        Test("Clipboard remaps platforms teleports switches and preserves settings", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);level.Pave();
+            level.Polygons[0].Type=PolygonType.Platform;level.Polygons[0].Permutation=0;
+            level.Platforms.Add(new Platform{PolygonIndex=0,Speed=32,Delay=60,Tag=7,MinimumHeight=-512,MaximumHeight=1024,InitiallyActive=true});
+            level.Polygons[1].Type=PolygonType.Teleporter;level.Polygons[1].Permutation=0;
+            var sourceSide=level.Sides.First(side=>side.PolygonIndex==1);sourceSide.IsControlPanel=true;sourceSide.ControlPanelType=(short)Array.IndexOf(Side.ControlPanelClasses,ControlPanelClass.PlatformSwitch);sourceSide.ControlPanelPermutation=0;
+            var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            Check(editor.CopySelection(out string reason) && editor.PasteSelection(5000,5000,out reason),reason);Validate(level);
+            Check(level.Platforms.Count==2 && level.Polygons[2].Permutation==1 && level.Platforms[1].PolygonIndex==2 && level.Platforms[1].Speed==32 && level.Platforms[1].InitiallyActive && level.Platforms[1].Tag==7,"Platform settings/reference lost");
+            Check(level.Polygons[3].Permutation==2 && level.Sides.Any(side=>side.PolygonIndex==3 && side.IsControlPanel && side.ControlPanelPermutation==2),"Internal teleport/switch reference lost");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Platforms[1].PolygonIndex==2 && loaded.Polygons[3].Permutation==2,"Serialized reference lost");
         });
         Console.WriteLine(passed + " test groups passed.");
     }

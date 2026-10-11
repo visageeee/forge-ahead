@@ -12,9 +12,10 @@ namespace Weland
             circleOptions = new Frame("Tool options") { NoShowAll = true, Margin = 6, Valign = Align.Start };
             var contents = new Box(Orientation.Vertical, 10) { Margin = 12 };
             contents.PackStart(new Label("Circle") { Xalign = 0 }, false, false, 0);
+            System.Action updateStairs = null;
             var filled = new CheckButton("Filled") { Active = editor.CircleFilled };
             filled.Toggled += (sender, args) => {
-                editor.CircleFilled = filled.Active;
+                editor.CircleFilled = filled.Active; updateStairs?.Invoke();
                 Weland.Settings.PutSetting("Tools/CircleFilled", filled.Active);
             };
             contents.PackStart(filled, false, false, 0);
@@ -39,6 +40,7 @@ namespace Weland
             var help = new Label("") { Xalign = 0, LineWrap = true, MaxWidthChars = 28 };
             void UpdateHelp() {
                 sizeRow.Sensitive = tessellate.Active;
+                updateStairs?.Invoke();
                 help.Text = tessellate.Active
                     ? "Drag to expand a tile patch.\n3, 4, or 6 sides tile directly.\n8 sides adds square fillers.\nExisting matching tiles are reused."
                     : "Drag opposite corners.\nHold Shift for a circle.\n3–8 sides per polygon.\nUncheck Filled for an outline.";
@@ -52,6 +54,7 @@ namespace Weland
                 editor.CircleTileSize = (int)Math.Round(size.Value * 1024);
                 Weland.Settings.PutSetting("Tools/CircleTileSize", editor.CircleTileSize);
             };
+            updateStairs = SetupStairsOptions(contents, false, () => filled.Active && tessellate.Active);
             UpdateHelp();
             contents.PackStart(help, false, false, 0);
             circleOptions.Add(contents);
@@ -71,11 +74,16 @@ namespace Weland
             boxOptions.Add(boxContents);
             boxContents.ShowAll();
             sidebar.PackStart(boxOptions, false, false, 0);
+            SetupRingOptions(sidebar);
+            SetupSelectOptions(sidebar);
             SetupHistory(sidebar);
             grid1.Attach(sidebar, 5, 0, 1, 1);
             sidebar.ShowAll();
             circleOptions.Hide();
             boxOptions.Hide();
+            ringOptions.Hide();
+            if (editor.Tool == Tool.Select) selectOptions.Show();
+            else selectOptions.Hide();
         }
     }
 }

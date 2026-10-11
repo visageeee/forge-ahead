@@ -1,4 +1,4 @@
-/out:Weland.exe
+/out:ForgeAhead.exe
 /pkg:gtk-dotnet-2.0
 /win32icon:"icons/Weland.ico"
 /platform:x86

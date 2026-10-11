@@ -22,7 +22,7 @@ namespace Weland
             Environment.SetEnvironmentVariable("XDG_DATA_DIRS", Path.Combine(root, "share"));
             Environment.SetEnvironmentVariable("GSETTINGS_SCHEMA_DIR", Path.Combine(root, "share", "glib-2.0", "schemas"));
             string id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(root)));
-            string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Weland-SE", "gtk-cache", id);
+            string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Forge-Ahead", "gtk-cache", id);
             Directory.CreateDirectory(cacheDir);
             string cache = Path.Combine(cacheDir, "loaders.cache");
             string content = File.ReadAllText(template).Replace("@GTKROOT@", root.Replace('\\', '/'));

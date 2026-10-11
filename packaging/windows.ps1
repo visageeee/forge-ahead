@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $prefix = Join-Path $env:MSYS2_ROOT 'ucrt64'
-$out = Join-Path $root 'dist\Weland-SE-win-x64'
+$out = Join-Path $root 'dist\Forge-Ahead-win-x64'
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item $out -ItemType Directory -Force | Out-Null
 dotnet publish Weland.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false -o $out
@@ -28,6 +28,6 @@ if ($cache -match '(?m)^"(?!@GTKROOT@)[A-Z]:') { throw 'Image cache still contai
 [IO.File]::WriteAllText("$out\loaders.cache.in", $cache)
 Copy-Item COPYING.txt "$out\COPYING.txt"
 Copy-Item packaging\BUILDING.md "$out\BUILDING.md"
-$zip = Join-Path $root 'dist\Weland-SE-win-x64.zip'
+$zip = Join-Path $root 'dist\Forge-Ahead-win-x64.zip'
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path $out -DestinationPath $zip

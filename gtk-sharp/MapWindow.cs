@@ -19,10 +19,12 @@ namespace Weland
             get { return drawingArea.Level; }
             set
             {
+                editor.ClearClipboard();
                 drawingArea.Level = value;
                 editor.CancelBox();
                 editor.CancelSelectionBox();
                 editor.CancelCircle();
+                editor.CancelRing();
                 editor.CancelMoveTool();
                 editor.ClearHover();
                 editor.Level = value;
@@ -80,6 +82,7 @@ namespace Weland
         [Widget] RadioToolButton lineButton;
         [Widget] RadioToolButton boxButton;
         [Widget] RadioToolButton circleButton;
+        [Widget] RadioToolButton ringButton;
         [Widget] RadioToolButton fillButton;
         [Widget] RadioToolButton objectButton;
         [Widget] RadioToolButton annotationButton;
@@ -206,6 +209,7 @@ namespace Weland
             SetIconResource(lineButton, "line.png");
             SetIconResource(boxButton, "box.svg");
             SetIconResource(circleButton, "circle.svg");
+            SetIconResource(ringButton, "ring.svg");
             SetIconResource(fillButton, "fill.png");
             SetIconResource(objectButton, "object.png");
             SetIconResource(annotationButton, "annotation.png");
@@ -311,8 +315,13 @@ namespace Weland
         {
             const int id = 1;
             statusbar.Pop(id);
+            if (editor.Pasting) { statusbar.Push(id, editor.PasteMessage); return; }
 
-            if (editor.Tool == Tool.Circle && (editor.DrawingCircle || editor.CircleMessage != null))
+            if (editor.Tool == Tool.Ring && (editor.DrawingRing || editor.RingMessage != null))
+            {
+                statusbar.Push(id, editor.RingMessage ?? string.Format("Ring: {0} sides, {1} inner rings, {2}", editor.RingSides, editor.RingHasInner ? editor.RingInnerCount : 0, editor.RingFilled ? "polygons" : "outline"));
+            }
+            else if (editor.Tool == Tool.Circle && (editor.DrawingCircle || editor.CircleMessage != null))
             {
                 statusbar.Push(id, editor.CircleMessage ?? (editor.DrawingCircleTessellation
                     ? String.Format("Tessellation: {0} tiles", editor.CircleTiles.Count)
@@ -770,10 +779,11 @@ namespace Weland
 
             if ((args.Event.State & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask)) == 0)
             {
-                if (editor.UpdateHover(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y))) Redraw();
+                if (editor.Pasting) { editor.MovePaste(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y)); Redraw(); }
+                else if (editor.UpdateHover(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y))) Redraw();
             }
 
-            if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
+            if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Ring || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
             {
                 UpdateStatusBar();
             }
@@ -862,9 +872,11 @@ namespace Weland
                     }
                     break;
                 case Gdk.Key.Escape:
+                    editor.CancelPaste();
                     editor.CancelBox();
                     editor.CancelSelectionBox();
                     editor.CancelCircle();
+                    editor.CancelRing();
                     editor.CancelMoveTool();
                     Redraw();
                     UpdateStatusBar();
@@ -918,6 +930,28 @@ namespace Weland
 
         internal void OnKeyPressed(object obj, KeyPressEventArgs args)
         {
+            if ((args.Event.State & (ModifierType.ControlMask | (PlatformDetection.IsMac ? ModifierType.MetaMask : 0))) != 0 &&
+                (args.Event.Key == Gdk.Key.c || args.Event.Key == Gdk.Key.C || args.Event.Key == Gdk.Key.v || args.Event.Key == Gdk.Key.V))
+            {
+                if (window1.Focus is Entry || window1.Focus is TextView) return;
+                selectButton.Active = true;
+                string reason;
+                if (args.Event.Key == Gdk.Key.c || args.Event.Key == Gdk.Key.C) editor.CopySelection(out reason);
+                else editor.BeginPaste(out reason);
+                UpdateStatusBar(); if (reason != null) statusbar.Push(1, reason);
+                Redraw(); args.RetVal = true; return;
+            }
+            bool selectShortcut = (args.Event.Key == Gdk.Key.a || args.Event.Key == Gdk.Key.A) &&
+                (args.Event.State & (ModifierType.ControlMask | (PlatformDetection.IsMac ? ModifierType.MetaMask : 0))) != 0;
+            if (selectShortcut)
+            {
+                // Keep standard text selection inside editable fields.
+                if (window1.Focus is Entry || window1.Focus is TextView) return;
+                selectButton.Active = true;
+                if ((args.Event.State & ModifierType.ShiftMask) != 0) editor.DeselectAllGeometry();
+                else editor.SelectAllGeometry();
+                UpdateInspector(); UpdateStatusBar(); Redraw(); args.RetVal = true; return;
+            }
             bool caught = true;
             switch (args.Event.Key)
             {
@@ -1139,7 +1173,7 @@ namespace Weland
             AdjustScrollRange();
             layer1.Active = true;
             ResetViewHeight();
-            window1.Title = Level.Name;
+            window1.Title = Level.Name + " — Forge Ahead";
             ChooseTool(editor.Tool);
             editor.Changed = false;
             BuildLevelMenu();
@@ -1228,7 +1262,7 @@ namespace Weland
             selection.Clear();
             editor.ClearUndo();
             BuildLevelMenu();
-            window1.Title = "Untitled Level";
+            window1.Title = "Untitled Level — Forge Ahead";
             Filename = "";
             ChooseTool(editor.Tool);
             editor.Changed = false;
@@ -1394,6 +1428,10 @@ namespace Weland
             else if (button == boxButton)
             {
                 ChooseTool(Tool.Box);
+            }
+            else if (button == ringButton)
+            {
+                ChooseTool(Tool.Ring);
             }
             else if (button == circleButton)
             {
@@ -1665,6 +1703,16 @@ namespace Weland
         void ChooseTool(Tool tool)
         {
             editor.Tool = tool;
+            if (selectOptions != null)
+            {
+                if (tool == Tool.Select) selectOptions.Show();
+                else selectOptions.Hide();
+            }
+            if (ringOptions != null)
+            {
+                if (tool == Tool.Ring) ringOptions.Show();
+                else ringOptions.Hide();
+            }
             if (circleOptions != null)
             {
                 if (tool == Tool.Circle) circleOptions.Show();
@@ -1683,7 +1731,7 @@ namespace Weland
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
             }
-            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
+            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Ring || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Cross);
             }
@@ -2166,7 +2214,7 @@ namespace Weland
             if (d.Run() == (int)ResponseType.Ok)
             {
                 editor.Changed = true;
-                window1.Title = Level.Name;
+                window1.Title = Level.Name + " — Forge Ahead";
                 BuildLevelMenu();
             }
             Redraw();
@@ -2442,15 +2490,19 @@ namespace Weland
         protected void OnAbout(object o, EventArgs e)
         {
             using var dialog = new AboutDialog();
-            dialog.ProgramName = "Weland";
+            dialog.ProgramName = "Forge Ahead";
+            dialog.Comments = "Map editor for Marathon. Based on Weland.";
             dialog.Artists = new string[] { "Robert Kreps (application icon)",
                         "tango-art-libre, GIMP, openclipart.org (tool icons)" };
-            dialog.Authors = new string[] { "Gregory Smith <wolfy@treellama.org>",
+            dialog.Authors = new string[] { "Enhancements by visage",
+                        "",
+                        "Original Weland app by:",
+                        "Gregory Smith <wolfy@treellama.org>",
                         "mijienke <mijenke@gmail.com> (custom grid)",
                         "effigy <this.effigy@gmail.com> (tooltips)",
                         "with thanks to Eric Peterson for Smithy"};
-            dialog.License = "Weland is available under the GNU General Public License, Version 2. See the file COPYING for details";
-            dialog.Website = "https://github.com/treellama/weland";
+            dialog.License = "Forge Ahead is available under the GNU General Public License, Version 2. See the file COPYING for details";
+            dialog.Website = "https://github.com/visageeee/forge-ahead";
             dialog.Version = Assembly.GetExecutingAssembly().GetName().Version.ToString();
             dialog.Run();
         }

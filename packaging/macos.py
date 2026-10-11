@@ -20,7 +20,7 @@ def main(rid):
         raise SystemExit('Build on a Mac matching the requested architecture')
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
-    app = root / 'dist' / rid / 'Weland SE.app'
+    app = root / 'dist' / rid / 'Forge Ahead.app'
     if app.exists():
         shutil.rmtree(app)
     contents = app / 'Contents'
@@ -137,15 +137,15 @@ def main(rid):
     icon = root / 'icons' / 'Weland.icns'
     if icon.exists():
         shutil.copy2(icon, contents / 'Resources' / icon.name)
-    info = dict(CFBundleName='Weland SE', CFBundleDisplayName='Weland SE',
-                CFBundleIdentifier='org.weland.se', CFBundleExecutable='Weland-SE',
+    info = dict(CFBundleName='Forge Ahead', CFBundleDisplayName='Forge Ahead',
+                CFBundleIdentifier='io.github.visageeee.forgeahead', CFBundleExecutable='Forge-Ahead',
                 CFBundlePackageType='APPL', CFBundleVersion='1', CFBundleShortVersionString='1.0',
                 NSHighResolutionCapable=True)
     if icon.exists():
         info['CFBundleIconFile'] = icon.name
     with (contents / 'Info.plist').open('wb') as f:
         plistlib.dump(info, f)
-    launcher = contents / 'MacOS' / 'Weland-SE'
+    launcher = contents / 'MacOS' / 'Forge-Ahead'
     launcher.write_text('''#!/bin/bash
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -158,19 +158,19 @@ export XDG_DATA_DIRS="$GTKROOT/share"
 export GSETTINGS_SCHEMA_DIR="$GTKROOT/share/glib-2.0/schemas"
 export GIO_EXTRA_MODULES="$GTKROOT/lib"
 export GDK_BACKEND=quartz
-CACHE="$(mktemp -d "${TMPDIR:-/tmp}/weland-gtk.XXXXXX")"
+CACHE="$(mktemp -d "${TMPDIR:-/tmp}/forge-ahead-gtk.XXXXXX")"
 trap 'rm -rf "$CACHE"' EXIT
 # Escape replacement metacharacters in user-controlled installation paths.
 ESCAPED="$(printf '%s' "$GTKROOT" | sed 's/[\\&|]/\\\\&/g')"
 sed "s|@GTKROOT@|$ESCAPED|g" "$GTKROOT/loaders.cache.in" > "$CACHE/loaders.cache"
 export GDK_PIXBUF_MODULE_FILE="$CACHE/loaders.cache"
-"$HERE/app/Weland" "$@"
+"$HERE/app/ForgeAhead" "$@"
 ''')
     launcher.chmod(0o755)
     # Ad-hoc signing permits local use; public notarization requires an Apple identity.
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app)], check=True)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
-    archive = root / 'dist' / f'Weland-SE-{rid}.zip'
+    archive = root / 'dist' / f'Forge-Ahead-{rid}.zip'
     if archive.exists():
         archive.unlink()
     subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(archive)], check=True)

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Forge Ahead
+GenericName=Map editor for Marathon
+Comment=Map editor for Marathon
+Path=/home/olle/Projects/weland
+Exec=/bin/bash -lc "dotnet run --project Weland.csproj"
+Icon=/home/olle/Projects/weland/icons/Weland_256x256.png
+Terminal=true
+Categories=Graphics;Development;
+StartupNotify=false

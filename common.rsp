@@ -19,6 +19,10 @@ BoxGeometry.cs
 SelectionBox.cs
 NestedBox.cs
 CircleTool.cs
+RingTool.cs
+SelectionCommands.cs
+SelectionClipboard.cs
+StairsTool.cs
 CircleTessellation.cs
 ShapeOutline.cs
 MoveTool.cs
@@ -33,6 +37,9 @@ level/TerminalPictures.cs
 level/TerminalPictureImports.cs
 gtk-sharp/TerminalEditor.cs
 gtk-sharp/CircleOptions.cs
+gtk-sharp/RingOptions.cs
+gtk-sharp/SelectOptions.cs
+gtk-sharp/StairsOptions.cs
 gtk-sharp/HistoryPanel.cs
 mac/IgeMacMenu.cs
 mac/IgeMacMenuGroup.cs
@@ -102,6 +109,7 @@ gtk-sharp/Widgets.cs
 /resource:images/move-selection.svg
 /resource:images/rotate.svg
 /resource:images/scale.svg
+/resource:images/ring.svg
 /resource:images/circle.svg
 /resource:images/box.svg
 /resource:images/line.png

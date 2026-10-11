@@ -28,7 +28,8 @@ namespace Weland
         Circle,
         Move,
         Rotate,
-        Scale
+        Scale,
+        Ring
     }
 
     [Flags]
@@ -120,9 +121,11 @@ namespace Weland
             {
                 if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
                 historyGesture = false;
+                CancelPaste();
                 CancelBox();
                 CancelSelectionBox();
                 CancelCircle();
+                CancelRing();
                 CancelMoveTool();
                 CancelRotateTool();
                 CancelScaleTool();
@@ -269,6 +272,21 @@ namespace Weland
         {
             BoxFilled = Weland.Settings.GetSetting("Tools/BoxFilled", true);
             CircleFilled = Weland.Settings.GetSetting("Tools/CircleFilled", true);
+            RingInnerCount = Weland.Settings.GetSetting("Tools/RingInnerCount", 1);
+            RingFilled = Weland.Settings.GetSetting("Tools/RingFilled", true);
+            RingStairCeiling = ClampCoordinate(Weland.Settings.GetSetting("Tools/RingStairCeiling", 1024));
+            RingCeilingFollows = Weland.Settings.GetSetting("Tools/RingCeilingFollows", false);
+            CircleStairCeiling = ClampCoordinate(Weland.Settings.GetSetting("Tools/CircleStairCeiling", 1024));
+            CircleCeilingFollows = Weland.Settings.GetSetting("Tools/CircleCeilingFollows", false);
+            RingStairs = Weland.Settings.GetSetting("Tools/RingStairs", false);
+            RingStairStart = ClampCoordinate(Weland.Settings.GetSetting("Tools/RingStairStart", 0));
+            RingStairStep = ClampCoordinate(Weland.Settings.GetSetting("Tools/RingStairStep", 128));
+            CircleStairs = Weland.Settings.GetSetting("Tools/CircleStairs", false);
+            CircleStairStart = ClampCoordinate(Weland.Settings.GetSetting("Tools/CircleStairStart", 0));
+            CircleStairStep = ClampCoordinate(Weland.Settings.GetSetting("Tools/CircleStairStep", 128));
+            RingSides = Weland.Settings.GetSetting("Tools/RingSides", 16);
+            RingHasInner = Weland.Settings.GetSetting("Tools/RingHasInner", true);
+            RingInnerPercent = Weland.Settings.GetSetting("Tools/RingInnerPercent", 50);
             CircleSides = Weland.Settings.GetSetting("Tools/CircleSides", 8);
             CircleTessellationEnabled = Weland.Settings.GetSetting("Tools/CircleTessellation", false);
             CircleTileSize = Weland.Settings.GetSetting("Tools/CircleTileSize", 1024);
@@ -283,6 +301,21 @@ namespace Weland
             Weland.Settings.PutSetting("Tools/BoxFilled", BoxFilled);
             Weland.Settings.PutSetting("Tools/CircleFilled", CircleFilled);
             Weland.Settings.PutSetting("Tools/CircleSides", CircleSides);
+            Weland.Settings.PutSetting("Tools/RingSides", RingSides);
+            Weland.Settings.PutSetting("Tools/RingStairs", RingStairs);
+            Weland.Settings.PutSetting("Tools/RingStairCeiling", (int)RingStairCeiling);
+            Weland.Settings.PutSetting("Tools/RingCeilingFollows", RingCeilingFollows);
+            Weland.Settings.PutSetting("Tools/CircleStairCeiling", (int)CircleStairCeiling);
+            Weland.Settings.PutSetting("Tools/CircleCeilingFollows", CircleCeilingFollows);
+            Weland.Settings.PutSetting("Tools/RingStairStart", (int)RingStairStart);
+            Weland.Settings.PutSetting("Tools/RingStairStep", (int)RingStairStep);
+            Weland.Settings.PutSetting("Tools/CircleStairs", CircleStairs);
+            Weland.Settings.PutSetting("Tools/CircleStairStart", (int)CircleStairStart);
+            Weland.Settings.PutSetting("Tools/CircleStairStep", (int)CircleStairStep);
+            Weland.Settings.PutSetting("Tools/RingInnerCount", RingInnerCount);
+            Weland.Settings.PutSetting("Tools/RingFilled", RingFilled);
+            Weland.Settings.PutSetting("Tools/RingHasInner", RingHasInner);
+            Weland.Settings.PutSetting("Tools/RingInnerPercent", RingInnerPercent);
             Weland.Settings.PutSetting("Tools/CircleTessellation", CircleTessellationEnabled);
             Weland.Settings.PutSetting("Tools/CircleTileSize", CircleTileSize);
             Weland.Settings.PutSetting("Distance/Select/Default", DefaultSnapDistance);
@@ -1375,6 +1408,13 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            if (Pasting)
+            {
+                pasteConsumed = true;
+                if (RightClick(mods)) CancelPaste();
+                else { MovePaste(X, Y); if (!PasteSelection(pastePosition.X, pastePosition.Y, out string reason)) PasteMessage = reason; }
+                return;
+            }
             CommitHistory();
             ClearHover();
             historyGesture = true;
@@ -1555,6 +1595,10 @@ namespace Weland
                 {
                     StartCircle(X, Y);
                 }
+                else if (Tool == Tool.Ring)
+                {
+                    StartRing(X, Y);
+                }
                 else if (Tool == Tool.Fill)
                 {
                     undoSet = false;
@@ -1580,6 +1624,7 @@ namespace Weland
 
         public void Motion(short X, short Y, EditorModifiers mods)
         {
+            if (pasteConsumed) return;
             if (rightButtonMove || Tool == Tool.Move)
             {
                 UpdateMoveTool(X, Y);
@@ -1595,6 +1640,10 @@ namespace Weland
             else if (Tool == Tool.Circle)
             {
                 UpdateCircle(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Ring)
+            {
+                UpdateRing(X, Y, (mods & EditorModifiers.Shift) != 0);
             }
             else if (Tool == Tool.Box)
             {
@@ -1743,6 +1792,7 @@ namespace Weland
 
         public void ButtonRelease(short X, short Y, EditorModifiers mods)
         {
+            if (pasteConsumed) { pasteConsumed = false; historyGesture = false; return; }
             historyGesture = false;
             if (rightButtonMove)
             {
@@ -1770,6 +1820,10 @@ namespace Weland
             else if (Tool == Tool.Circle)
             {
                 FinishCircle(X, Y, (mods & EditorModifiers.Shift) != 0);
+            }
+            else if (Tool == Tool.Ring)
+            {
+                FinishRing(X, Y, (mods & EditorModifiers.Shift) != 0);
             }
             else if (Tool == Tool.Box)
             {

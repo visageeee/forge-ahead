@@ -6,9 +6,9 @@
 DIR=$(cd "$(dirname "$0")"; pwd)
  
 #change these values to match your app
-EXE_PATH="$DIR\Weland.exe"
-PROCESS_NAME=weland
-APPNAME="Weland"
+EXE_PATH="$DIR\ForgeAhead.exe"
+PROCESS_NAME=forge-ahead
+APPNAME="Forge Ahead"
  
 #set up environment
 MONO_FRAMEWORK_PATH=/Library/Frameworks/Mono.framework/Versions/Current

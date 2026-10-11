@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ForgeAhead</AssemblyName>
     <StartupObject>Weland.Weland</StartupObject>
     <ApplicationIcon>icons\Weland.ico</ApplicationIcon>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -66,6 +67,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="images\scale.svg">
       <LogicalName>scale.svg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="images\ring.svg">
+      <LogicalName>ring.svg</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="images\circle.svg">
       <LogicalName>circle.svg</LogicalName>
