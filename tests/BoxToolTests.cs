@@ -7,7 +7,7 @@ namespace Weland
     // The editor settings normally live on the GTK application entry point.
     public static class Weland
     {
-        public static Settings Settings = new Settings();
+        public static Settings Settings = new Settings(false);
     }
 }
 
@@ -1606,6 +1606,19 @@ class BoxToolTests
                 Check(editor.HistoryLabels.Count==2,"Painting sampled value did not record undo: "+tool);
                 editor.Undo();Check(CanonicalSnapshot(level)==before,"Paint undo failed: "+tool);
             }
+        });
+        Test("Editor settings round trip in memory without depending on user preferences", () => {
+            var original=Weland.Weland.Settings;
+            try {
+                Weland.Weland.Settings=new Settings(false);
+                var editor=Editor(new Level());
+                Check(editor.BoxFilled && editor.CircleFilled && !editor.CircleTessellationEnabled && editor.CircleSides==8,"Isolated defaults wrong");
+                editor.BoxFilled=false;editor.CircleFilled=false;editor.CircleTessellationEnabled=true;editor.CircleSides=6;editor.CircleTileSize=512;editor.SaveSettings();
+                var loaded=Editor(new Level());
+                Check(!loaded.BoxFilled && !loaded.CircleFilled && loaded.CircleTessellationEnabled && loaded.CircleSides==6 && loaded.CircleTileSize==512,"In-memory settings failed to round trip");
+                Weland.Weland.Settings=new Settings(false);
+                var clean=Editor(new Level());Check(clean.BoxFilled && clean.CircleFilled && !clean.CircleTessellationEnabled,"Fresh test settings inherited earlier choices");
+            } finally {Weland.Weland.Settings=original;}
         });
         Console.WriteLine(passed + " test groups passed.");
     }

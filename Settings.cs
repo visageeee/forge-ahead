@@ -11,13 +11,23 @@ namespace Weland
         XmlDocument xmlDocument = new XmlDocument();
         string applicationData;
         string documentPath;
+        readonly bool persistent;
 
         private CultureInfo ic = CultureInfo.InvariantCulture;
 
-        public Settings()
+        public Settings() : this(true) { }
+
+        public Settings(bool persistent)
         {
+            this.persistent = persistent;
             applicationData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "//Weland";
             documentPath = applicationData + "//settings.xml";
+
+            if (!persistent)
+            {
+                xmlDocument.LoadXml("<settings></settings>");
+                return;
+            }
 
             try
             {
@@ -77,6 +87,7 @@ namespace Weland
                 xmlNode = createMissingNode("settings/" + xPath);
             }
             xmlNode.InnerText = value;
+            if (!persistent) return;
             try
             {
                 if (!Directory.Exists(applicationData))
