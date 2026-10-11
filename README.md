@@ -4,7 +4,7 @@
 
 Forge Ahead is an expanded fork of [Weland](https://github.com/treellama/weland),
 the Marathon map editor originally created by Gregory Smith. It supports map
-editing for Marathon, Aleph One, and Sprintathon, using .NET 8 and GTK 3.
+editing for the original Marathon games, the Aleph One source port and it's forks, using .NET 8 and GTK 3.
 
 This fork was renamed by request to differentiate it from the original Weland project.
 
