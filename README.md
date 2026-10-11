@@ -10,9 +10,9 @@ This fork was renamed by request to differentiate it from the original Weland pr
 
 ## Development with AI
 
-The enhancements in this fork are developed by using AI coding tools. Feature direction and testing are guided by the repo creator;
+The enhancements in this fork are developed by using AI coding tools. Feature direction and testing are guided by the repo creator.
 
-##Notable Added features
+### Notable Added features
 
 ### Drawing and geometry
 
