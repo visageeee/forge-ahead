@@ -4,6 +4,8 @@ using System.Linq;
 
 namespace Weland
 {
+    public enum TessellationPattern { Regular, PenroseRhombs }
+
     public static class CircleTessellation
     {
         public const int MaxTiles = 256;
@@ -93,6 +95,98 @@ namespace Weland
         }
     }
 
+    public static class PenroseTessellation
+    {
+        struct Vector
+        {
+            public double X,Y;
+            public Vector(double x,double y) { X=x;Y=y; }
+            public Vector Towards(Vector b,double fraction) => new Vector(X+(b.X-X)*fraction,Y+(b.Y-Y)*fraction);
+        }
+        struct Triangle
+        {
+            public bool Obtuse;
+            public Vector A,B,C;
+            public Triangle(bool obtuse,Vector a,Vector b,Vector c) { Obtuse=obtuse;A=a;B=b;C=c; }
+        }
+
+        public static bool TryBuild(Point origin,Point end,int edgeSize,out List<List<Point>> tiles,
+            out List<int> stairSteps,out string reason)
+        {
+            tiles=new List<List<Point>>();stairSteps=new List<int>();reason=null;
+            if(edgeSize<16 || edgeSize>8192) { reason="Choose an edge length between 1/64 and 8 world units.";return false; }
+            // A fixed sun seed keeps the pattern stable as the drag grows.
+            // Robinson triangle substitution, then pair halves along their bases.
+            const int depth=6;
+            double phi=(1+Math.Sqrt(5))/2,radius=Math.Pow(phi,depth);
+            double dx=end.X-origin.X,dy=end.Y-origin.Y;
+            if(Math.Max(Math.Abs(dx),Math.Abs(dy))/edgeSize>radius*Math.Cos(Math.PI/10)-2)
+            { reason="Drag a smaller Penrose patch or increase the edge length.";return false; }
+            var triangles=new List<Triangle>();
+            for(int i=0;i<10;i++) {
+                double angleB=(2*i-1)*Math.PI/10,angleC=(2*i+1)*Math.PI/10;
+                var b=new Vector(radius*Math.Cos(angleB),radius*Math.Sin(angleB));
+                var c=new Vector(radius*Math.Cos(angleC),radius*Math.Sin(angleC));
+                if(i%2==0) { var swap=b;b=c;c=swap; }
+                triangles.Add(new Triangle(false,new Vector(0,0),b,c));
+            }
+            for(int generation=0;generation<depth;generation++) {
+                var next=new List<Triangle>();
+                foreach(var t in triangles) {
+                    if(!t.Obtuse) {
+                        var p=t.A.Towards(t.B,1/phi);
+                        next.Add(new Triangle(false,t.C,p,t.B));
+                        next.Add(new Triangle(true,p,t.C,t.A));
+                    } else {
+                        var q=t.B.Towards(t.A,1/phi);var r=t.B.Towards(t.C,1/phi);
+                        next.Add(new Triangle(true,r,t.C,t.A));
+                        next.Add(new Triangle(true,q,r,t.B));
+                        next.Add(new Triangle(false,r,q,t.A));
+                    }
+                }
+                triangles=next;
+            }
+            (long,long) Key(Vector v) => ((long)Math.Round(v.X*1e9),(long)Math.Round(v.Y*1e9));
+            var halves=new Dictionary<(bool,long,long,long,long),Triangle>();
+            var rings=new List<List<Vector>>();
+            double left=Math.Min(0,dx)/edgeSize-1,right=Math.Max(0,dx)/edgeSize+1;
+            double top=Math.Min(0,dy)/edgeSize-1,bottom=Math.Max(0,dy)/edgeSize+1;
+            foreach(var t in triangles) {
+                var b=Key(t.B);var c=Key(t.C);
+                if(b.Item1>c.Item1 || (b.Item1==c.Item1 && b.Item2>c.Item2)) { var swap=b;b=c;c=swap; }
+                var key=(t.Obtuse,b.Item1,b.Item2,c.Item1,c.Item2);
+                if(!halves.TryGetValue(key,out Triangle other)) { halves.Add(key,t);continue; }
+                halves.Remove(key);
+                var ring=new List<Vector>{t.A,t.B,other.A,t.C};
+                double x=ring.Average(v=>v.X),y=ring.Average(v=>v.Y);
+                if(x<left || x>right || y<top || y>bottom)continue;
+                rings.Add(ring);
+            }
+            if(rings.Count==0 || rings.Count>CircleTessellation.MaxTiles)
+            { reason="Choose a Penrose patch of 1–256 tiles; shorten the drag or increase the edge length.";return false; }
+            bool alongX=Math.Abs(dx)>=Math.Abs(dy);
+            foreach(var ring in rings.OrderBy(r=>r.Average(v=>v.Y)).ThenBy(r=>r.Average(v=>v.X))) {
+                var points=new List<Point>();
+                foreach(var v in ring) {
+                    // Canonical coordinates make independently calculated shared
+                    // vertices round identically, including half-coordinate ties.
+                    var key=Key(v);
+                    long x=(long)Math.Floor(origin.X+key.Item1*(edgeSize/1e9)+0.5),y=(long)Math.Floor(origin.Y+key.Item2*(edgeSize/1e9)+0.5);
+                    if(x<short.MinValue || x>short.MaxValue || y<short.MinValue || y>short.MaxValue)
+                    { tiles.Clear();stairSteps.Clear();reason="The patch extends beyond the map coordinate limits.";return false; }
+                    points.Add(new Point((short)x,(short)y));
+                }
+                long Cross(Point a,Point b,Point c) => (long)(b.X-a.X)*(c.Y-a.Y)-(long)(b.Y-a.Y)*(c.X-a.X);
+                if(Cross(points[0],points[1],points[2])<0)points.Reverse();
+                if(points.Distinct().Count()!=4 || Enumerable.Range(0,4).Any(i=>Cross(points[i],points[(i+1)%4],points[(i+2)%4])<=0))
+                { tiles.Clear();stairSteps.Clear();reason="Increase the edge length to keep every Penrose tile convex.";return false; }
+                tiles.Add(points);
+                stairSteps.Add((int)Math.Floor(Math.Abs(ring.Average(v=>alongX?v.X:v.Y))));
+            }
+            return true;
+        }
+    }
+
     public partial class Level
     {
         public bool PlanCircleTessellation(List<List<Point>> tiles, out Level plan,
@@ -131,6 +225,15 @@ namespace Weland
 
     public partial class Editor
     {
+        TessellationPattern circlePattern;
+        public TessellationPattern CirclePattern
+        {
+            get=>circlePattern;
+            set {
+                var next=value==TessellationPattern.PenroseRhombs ? value : TessellationPattern.Regular;
+                if(next!=circlePattern) { CancelCircle();circlePattern=next; }
+            }
+        }
         bool circleTessellation;
         int circleTileSize = 1024;
         public bool CircleTessellationEnabled
@@ -155,8 +258,11 @@ namespace Weland
         void UpdateCircleTessellation(short x, short y)
         {
             circleTilePlan = null;
-            CircleTessellation.TryBuild(CircleStart, new Point(x,y), CircleSides, CircleTileSize,
-                out var tiles, out var stairSteps, out string reason);
+            List<List<Point>> tiles;List<int> stairSteps;string reason;
+            if(CirclePattern==TessellationPattern.PenroseRhombs)
+                PenroseTessellation.TryBuild(CircleStart,new Point(x,y),CircleTileSize,out tiles,out stairSteps,out reason);
+            else CircleTessellation.TryBuild(CircleStart, new Point(x,y), CircleSides, CircleTileSize,
+                out tiles, out stairSteps, out reason);
             CircleTiles = tiles;
             if (reason == null)
             {

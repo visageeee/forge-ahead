@@ -312,8 +312,8 @@ Scripts run in list order in gameplay. They share Lua globals, so coordinate
 trigger definitions when combining scripts. The editor stores source but does
 not syntax-check or run it. Import UTF-8 text Lua files, not Lua bytecode.
 
-Visual mode temporarily disables embedded gameplay Lua and uses only its own
-locator script when needed. The original Lua chunk is restored exactly on return
+Visual mode runs embedded gameplay Lua, including polygon triggers. Its
+locator script preserves existing callbacks and positions the player before initialization. The original Lua chunk is restored exactly on return
 and remains intact if visual mode fails. Existing names, flags and source bytes
 are preserved when not edited. MML export remains a separate feature.
 
@@ -445,3 +445,187 @@ Platform settings and references between copied polygons follow their copies.
 Existing terminal, texture, light, sound and media IDs remain level-local; this
 is an internal clipboard for the current level, cleared when changing levels
 or opening another map. It does not exchange geometry with other applications.
+
+## Line tool: split all intersected polygons
+
+Enable **Split all intersected polygons** in the Line tool's sidebar, then drag
+through the polygons to cut. The option is off by default and remembered between
+sessions. When enabled, the start and end can be outside the map geometry;
+each convex polygon crossed from boundary to boundary is split. Vertices are
+created at crossings, shared walls use a single shared vertex, and the complete
+path is connected through empty gaps and beyond the outer walls. Loose lines
+are split at crossings too. Existing collinear lines and vertices are reused.
+
+The entire path is one **Split intersected polygons** undo action. Polygon
+settings, wall textures, objects and notes follow the resulting polygons.
+Existing matching vertices and path segments are reused.
+Escape, switching tools, or changing the checkbox cancels an unfinished line.
+Failures restore the complete original map, including deferred start vertices.
+
+Start and end outside polygons or on their boundaries. Ending inside a polygon
+would leave an incomplete cut and is rejected. Crossings between map coordinates
+are rounded to the nearest coordinate in each axis (at most half a coordinate
+per axis). Both sides of a shared wall use the same point. A sloping wall may
+bend slightly through that point, while its original endpoints remain in place;
+this avoids jumping to distant vertices on sparse integer edges. If rounding
+cannot produce valid convex polygons and a connected path without crossings,
+the cut is rejected atomically. Cuts exceeding the engine's eight-vertex limit
+are rejected.
+With the checkbox disabled, the existing boundary-to-boundary cut behavior remains.
+
+The Line tool shares Select's geometry targeting: vertices take priority over
+edges, with the same zoom-aware snap distance, visible-geometry filters, and
+hover colors. Polygon interiors use the polygon hover color. The hovered edge
+or vertex remains highlighted during a drag; preview and release resolve the
+same endpoint. Edges snap to the nearest projected map coordinate, including
+sparse sloping edges. A tiny bend may be needed when attaching to a sloping
+edge. Grid snapping applies when no nearby geometry is targeted. The separate
+vertex-snap checkbox and edge-snap distance field are no longer needed.
+
+Sidebar numeric inputs commit and release keyboard focus on Enter. Clicking
+the map, tools, or other non-input controls also releases input focus so tool
+hotkeys work again. Text editing keeps its normal shortcuts while focused.
+
+
+### Penrose tessellation
+
+In the Circle tool, enable **Tessellate** and choose **Pattern → Penrose rhombs**.
+Set **Edge length (WU)**, then click and drag to expand a patch of thin and thick
+rhombi. Every tile is a convex four-sided polygon; the Sides field applies only
+to regular patterns. Filled, outline, and Stairs work as for other tessellations.
+The pattern choice is saved in preferences.
+
+The drag selects complete tiles by their centers with a one-edge margin, so the
+outer border is jagged
+and can extend past the drag rectangle. A fixed six-generation sun seed keeps
+the tiling stable while dragging and allows matching patches at the same origin
+to be extended or reused. Patches are limited to 256 tiles and roughly sixteen
+edge lengths from the origin per axis; increase Edge length for a larger area.
+Shared vertices use the same rounded map coordinates. Map bounds, convexity,
+overlap, and height limits are checked before committing; the entire patch is
+one undo step.
+
+Construction uses golden-ratio Robinson triangle subdivision and joins paired
+halves into Penrose rhombi. Reference: [Bielefeld University's Tilings
+Encyclopedia](https://tilings.math.uni-bielefeld.de/substitution/robinson-triangle/).
+
+
+### Interactive performance
+
+Map drawing batches polygons, edges, vertices, and grid marks with the same
+style instead of issuing a separate Cairo paint for every item. Very dense
+standard and custom grids show fewer lines when zoomed out; grid snapping keeps
+the configured spacing. Hover, pan, selection, and transform pointer updates
+are coalesced to the newest sample about every 16 ms. The pending sample is
+processed before a mouse release, scroll, or special key; painting modes retain
+every pointer sample so strokes do not skip surfaces. Moving a group updates
+all vertices before recalculating each affected polygon once per update.
+
+Headless benchmarks on a synthetic 1,800-polygon/4,000-edge/2,500-vertex scene
+measured roughly 17.0 ms per frame before and 13.5 ms after, with identical
+rendered pixels. Moving a selected 256-polygon grid measured approximately
+0.59 ms per update before and 0.22 ms after, with allocations reduced from
+131 KB to 60 KB per update. These measurements exclude GTK event handling and
+window compositing; desktop responsiveness still needs interactive verification.
+
+
+### Polygon Lua entry triggers
+
+Select one or more polygons and use **Polygon Lua trigger…** in the Select
+sidebar. Enable the trigger and enter a Lua code body. `player` is the player
+who entered and `polygon` is the entered polygon. For example:
+
+```lua
+player:print("Welcome to the reactor")
+-- Or call a function defined in Level Lua Scripts:
+-- enter_reactor(player, polygon)
+```
+
+Apply replaces the binding on every selected polygon. **Enabled** can disable
+it while retaining the code; **Remove** clears it. **Once per level** fires only
+for the first player entering each assigned polygon, shared by all players.
+Starting or respawning in a polygon counts as entry. Staying inside does not
+repeat the trigger; leaving and entering again fires it again unless Once is
+checked. The generated dispatcher checks player polygons after each engine
+tick. Extremely thin polygons crossed completely between checks may be missed.
+
+Assignments preserve polygon type and permutation. They follow polygon
+renumbering, copy/paste, and undo; split/inset pieces inherit the original
+binding and each piece has its own Once state. Function calls still require the
+named function to exist in that level's Lua scripts. Lua syntax is checked by
+the engine, not the dialog.
+
+Save embeds a generated **Forge Ahead Polygon Triggers** Lua script after the
+other embedded scripts and stores editable assignments in the level's `FLUA`
+chunk. The generated script is read-only in Level Lua Scripts; edit it through
+the Select sidebar. Other scripts are preserved, and existing `Triggers.init`
+and `Triggers.postidle` callbacks are called. Once state uses Game custom
+fields and is restored from a saved game; existing init callbacks run after
+this restoration. Restoring a checkpoint does not itself count as entry.
+Bindings and generated code are protected during visual mode. No external Lua
+file or special polygon type is required.
+
+The engine events and saved custom fields are described in the official
+[Aleph One Lua reference](https://github.com/Aleph-One-Marathon/alephone/blob/master/docs/Lua.html).
+
+
+### Premade polygon Lua actions
+
+**Polygon Lua trigger… → Insert premade action** offers categorized presets.
+Select a category and action, enter its parameters, then **Insert at cursor**.
+The generated code is editable and can be combined with other actions before
+Apply. Inserting does not change the map until Apply.
+
+- **Ammo & weapons:** refill all ammo, give all weapons and ammo, or add packs
+  of a particular ammunition item.
+- **Health & oxygen:** instant healing, refill health to a cap, gradual healing,
+  and oxygen refill. Health caps use points: 150 is one normal shield bar, 450
+  is three. Healing never lowers health already above the chosen cap.
+- **Sounds:** play a sound to the entering player, or a positional sound from a
+  selected polygon. Sound ID and pitch are configurable.
+- **Monsters:** choose monster type ID, destination polygon ID, and count
+  (1–16). Monsters spawn at the destination's floor and are activated. Set a
+  matching Shapes collection ID to preload graphics if the collection is not
+  already loaded; -1 means it is already loaded. Retain the generated preload
+  comment so the editor can put its collection request outside the callback.
+  Monster types, collections, sounds and inventory IDs follow scenario/physics
+  definitions; stock ID labels are provided as examples.
+- **World:** teleport the player, activate/deactivate lights, or activate/
+  deactivate platform polygons (including doors).
+- **Messages:** display text to the entering player, with Lua quoting handled
+  automatically.
+
+A polygon ID of -1 uses the triggering polygon. Explicit polygon/light IDs in
+code are literal values; check them after deleting or renumbering target
+geometry. Trigger assignments themselves continue to follow their polygons.
+
+Gradual healing uses points per second and a total healing amount. It continues
+after leaving, stops at the cap or when its amount is exhausted, and stops on
+death. Re-entering restarts the effect unless Once per level prevents another
+activation. Effects on different players are independent. The dispatcher
+processes healing every engine tick and stores the remaining amount and partial
+second in Player custom fields so checkpoints can restore an unfinished effect.
+Only one gradual-healing effect runs per player; a new one replaces the old one.
+
+Useful future presets include timed doors, fog transitions, objectives and
+monster waves.
+
+Lua trigger polygons are tinted pink in normal drawing mode when enabled and nonempty. Selection, hover, destination and invalid-polygon colors take priority; height/texture modes retain their own colors.
+
+The Spawn monsters preset averages the destination polygon's vertices for its position, avoiding stale stored centers. A zero floor-relative spawn height places monsters on the current floor, including raised/lowered floors and platforms. Unchanged older Spawn monsters preset blocks are repaired when loading or saving. Reopen and save existing maps before testing in the engine. Custom-edited spawn code is preserved.
+
+Spawn actions now automatically preload their monster graphics using embedded MNpx physics, or standard Marathon 2/Infinity collections when no embedded definition exists. Existing preset calls are recognized on save. External physics and nonstandard scenarios may require the extra collection ID. A new game after saving is required to load new graphics.
+
+The Fog category offers Set and enable, Enable, Disable, Change color, and Change depth. Choose normal or underwater fog; color channels use 0–1 and depth uses world units (smaller is denser). These change the view's fog, not the polygon's geometry, and persist until another action changes it.
+
+Fog > Transition fog smoothly interpolates color and depth over a duration in seconds (0.1–600). Each layer has one transition; another replaces it from its current values, and immediate fog actions cancel it. Transitions advance once per 30 Hz engine tick and retain progress through saved games. Starting with disabled fog enables it from a distant depth of 1024 world units.
+
+Lua action fields now offer named dropdowns beside editable IDs for monsters, sounds, ammo, collections, polygons and lights. Names describe standard Marathon assets; custom scenarios may repurpose IDs. Unlisted IDs remain available through the numeric field. Fog layer and landscape choices have dropdowns too.
+
+Fog transitions interpolate inverse depth (fog strength), avoiding an almost-clear view followed by a sudden thickening when fading from very distant fog. Use **Transition fog smoothly** and set its duration; **Set fog instantly** deliberately makes an immediate change. Existing transition actions use the improved interpolation after saving the map.
+
+The polygon Lua dialog has premade actions in a scrollable left sidebar with a prominent Insert at cursor button, and the script on the right. Apply script action to polygon saves the complete script to the selected polygons; Remove script action from polygon clears their triggers.
+
+Start monster spawner at polygon spawns immediately and then at the selected interval in seconds. Maximum total monsters counts successful creations; Indefinite ignores that total limit. It runs after leaving the trigger. Re-entering does not reset an existing or completed spawner. Stop monster spawner at polygon removes it, allowing a later start to begin again. Progress survives saved games; a new level resets it. One spawner is supported per destination polygon. Graphics preload automatically as for Spawn monsters.
+
+The polygon Lua dialog places Insert, Cancel, Remove, and Apply on one footer row. Both script editors color Lua keywords, strings, comments, and numbers without changing source text.

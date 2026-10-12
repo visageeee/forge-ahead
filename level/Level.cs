@@ -402,6 +402,7 @@ namespace Weland
             {
                 LoadChunkList<RandomSound>(RandomSounds, wad.Chunks[RandomSound.Tag]);
             }
+            PolygonLua.Load(this);
         }
 
         public void AssurePlayerStart()
@@ -431,6 +432,7 @@ namespace Weland
         public Wadfile.DirectoryEntry Save()
         {
             UpdatePolygonWallReferences();
+            PolygonLua.Save(this);
             Wadfile.DirectoryEntry wad = new Wadfile.DirectoryEntry();
             wad.Chunks = Chunks;
             wad.Chunks[MapInfo.Tag] = SaveChunk(mapInfo);

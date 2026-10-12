@@ -3,6 +3,7 @@ using Gdk;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
@@ -126,7 +127,7 @@ namespace Weland
             drawingArea.Expand = true;
             drawingArea.ConfigureEvent += OnConfigure;
             drawingArea.MotionNotifyEvent += OnMotion;
-            drawingArea.LeaveNotifyEvent += (sender, args) => { editor.ClearHover(); Redraw(); };
+            drawingArea.LeaveNotifyEvent += (sender, args) => { FlushPendingMotion(); editor.ClearHover(); Redraw(); };
             drawingArea.ButtonPressEvent += OnButtonPressed;
             drawingArea.ButtonReleaseEvent += OnButtonReleased;
             drawingArea.ScrollEvent += OnScroll;
@@ -305,10 +306,44 @@ namespace Weland
             int left = Weland.Settings.GetSetting("MapWindow/Left", 0);
             window1.Move(left, top);
 
+            window1.Destroyed+=(sender,args)=>CancelPendingMotion();
+            SetupInputFocus(window1);
             window1.Show();
 
             window1.Focus = null;
 
+        }
+
+        void ReleaseInputFocus()
+        {
+            if(window1.Focus is SpinButton spin)spin.Update();
+            if(window1.Focus is Entry || window1.Focus is TextView)window1.Focus=null;
+        }
+
+        void SetupInputFocus(Gtk.Widget widget)
+        {
+            if(widget is Entry entry) {
+                entry.Activated+=(sender,args)=>ReleaseInputFocus();
+            } else if(!(widget is TextView)) {
+                widget.ButtonPressEvent+=OnNonInputPressed;
+            }
+            if(widget is Container container)foreach(var child in container.Children)SetupInputFocus(child);
+        }
+
+        static bool IsInputWidget(Gtk.Widget widget)
+        {
+            for(var current=widget;current!=null;current=current.Parent)
+                if(current is Entry || current is TextView)return true;
+            return false;
+        }
+
+        [GLib.ConnectBefore()]
+        void OnNonInputPressed(object sender,ButtonPressEventArgs args)
+        {
+            // A container also receives clicks originating in its inputs. Check
+            // the original event widget before releasing their keyboard focus.
+            if(IsInputWidget(Gtk.Global.GetEventWidget(args.Event)))return;
+            ReleaseInputFocus();
         }
 
         void UpdateStatusBar()
@@ -317,7 +352,11 @@ namespace Weland
             statusbar.Pop(id);
             if (editor.Pasting) { statusbar.Push(id, editor.PasteMessage); return; }
 
-            if (editor.Tool == Tool.Ring && (editor.DrawingRing || editor.RingMessage != null))
+            if (editor.Tool == Tool.Line && editor.LineToolError != null)
+            {
+                statusbar.Push(id, editor.LineToolError);
+            }
+            else if (editor.Tool == Tool.Ring && (editor.DrawingRing || editor.RingMessage != null))
             {
                 statusbar.Push(id, editor.RingMessage ?? string.Format("Ring: {0} sides, {1} inner rings, {2}", editor.RingSides, editor.RingHasInner ? editor.RingInnerCount : 0, editor.RingFilled ? "polygons" : "outline"));
             }
@@ -494,6 +533,7 @@ namespace Weland
 
         internal void OnScroll(object obj, ScrollEventArgs args)
         {
+            FlushPendingMotion();
             ScrollWheelBehavior behavior = (ScrollWheelBehavior)Weland.Settings.GetSetting("ScrollWheelBehavior", (int)ScrollWheelBehavior.Zoom);
             if (behavior == ScrollWheelBehavior.Zoom)
             {
@@ -628,6 +668,8 @@ namespace Weland
 
         internal void OnButtonPressed(object obj, ButtonPressEventArgs args)
         {
+            FlushPendingMotion();
+            ReleaseInputFocus();
             EventButton ev = args.Event;
             short X = drawingArea.Transform.ToMapX(ev.X);
             short Y = drawingArea.Transform.ToMapY(ev.Y);
@@ -723,6 +765,7 @@ namespace Weland
 
         internal void OnButtonReleased(object obj, ButtonReleaseEventArgs args)
         {
+            FlushPendingMotion();
             if (args.Event.Button == 1 || args.Event.Button == 3)
             {
                 EditorModifiers modifiers = Modifiers(args.Event.State);
@@ -754,33 +797,66 @@ namespace Weland
             args.RetVal = true;
         }
 
+        uint motionTimer;
+        bool motionPending;
+        double pendingMotionX,pendingMotionY;
+        ModifierType pendingMotionState;
+        Tool pendingMotionTool;
+
+        void CancelPendingMotion()
+        {
+            if(motionTimer!=0) { GLib.Source.Remove(motionTimer);motionTimer=0; }
+            motionPending=false;
+        }
+
+        void FlushPendingMotion()
+        {
+            if(motionTimer!=0) { GLib.Source.Remove(motionTimer);motionTimer=0; }
+            if(!motionPending)return;
+            motionPending=false;
+            if(editor.Tool==pendingMotionTool)ProcessMotion(pendingMotionX,pendingMotionY,pendingMotionState);
+        }
+
         internal void OnMotion(object obj, MotionNotifyEventArgs args)
         {
-            if ((args.Event.State & ModifierType.Button3Mask) != 0)
+            // Coalesce previews to the newest pointer sample. Painting keeps
+            // every sample so fast strokes don't skip surfaces.
+            bool dragging=(args.Event.State & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask))!=0;
+            bool transform=editor.Tool==Tool.Select || editor.Tool==Tool.Move || editor.Tool==Tool.Rotate || editor.Tool==Tool.Scale || editor.Tool==Tool.Pan || (args.Event.State & ModifierType.Button2Mask)!=0;
+            if(dragging && !transform) {
+                FlushPendingMotion();ProcessMotion(args.Event.X,args.Event.Y,args.Event.State);
+            } else {
+                pendingMotionX=args.Event.X;pendingMotionY=args.Event.Y;pendingMotionState=args.Event.State;pendingMotionTool=editor.Tool;motionPending=true;
+                if(motionTimer==0)motionTimer=GLib.Timeout.Add(16,()=> { motionTimer=0;FlushPendingMotion();return false; });
+            }
+            args.RetVal=true;
+        }
+
+        void ProcessMotion(double screenX,double screenY,ModifierType state)
+        {
+            if ((state & ModifierType.Button3Mask) != 0)
             {
-                editor.Motion(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y),
-                    Modifiers(args.Event.State) | EditorModifiers.RightClick);
+                editor.Motion(drawingArea.Transform.ToMapX(screenX), drawingArea.Transform.ToMapY(screenY),
+                    Modifiers(state) | EditorModifiers.RightClick);
                 UpdatePaintPalette();
                 RedrawDirty();
                 UpdateStatusBar();
-                args.RetVal = true;
             }
-            else if ((editor.Tool == Tool.Pan && (args.Event.State & ModifierType.Button1Mask) != 0) || ((args.Event.State & ModifierType.Button2Mask) != 0))
+            else if ((editor.Tool == Tool.Pan && (state & ModifierType.Button1Mask) != 0) || ((state & ModifierType.Button2Mask) != 0))
             {
-                hscrollbar1.Value = xOffsetDown + (xDown - args.Event.X) / drawingArea.Transform.Scale;
-                vscrollbar1.Value = yOffsetDown + (yDown - args.Event.Y) / drawingArea.Transform.Scale;
-                args.RetVal = true;
+                hscrollbar1.Value = xOffsetDown + (xDown - screenX) / drawingArea.Transform.Scale;
+                vscrollbar1.Value = yOffsetDown + (yDown - screenY) / drawingArea.Transform.Scale;
             }
-            else if ((args.Event.State & ModifierType.Button1Mask) != 0)
+            else if ((state & ModifierType.Button1Mask) != 0)
             {
-                editor.Motion(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y), Modifiers(args.Event.State));
+                editor.Motion(drawingArea.Transform.ToMapX(screenX), drawingArea.Transform.ToMapY(screenY), Modifiers(state));
                 RedrawDirty();
             }
 
-            if ((args.Event.State & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask)) == 0)
+            if ((state & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask)) == 0)
             {
-                if (editor.Pasting) { editor.MovePaste(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y)); Redraw(); }
-                else if (editor.UpdateHover(drawingArea.Transform.ToMapX(args.Event.X), drawingArea.Transform.ToMapY(args.Event.Y))) Redraw();
+                if (editor.Pasting) { editor.MovePaste(drawingArea.Transform.ToMapX(screenX), drawingArea.Transform.ToMapY(screenY)); Redraw(); }
+                else if (editor.UpdateHover(drawingArea.Transform.ToMapX(screenX), drawingArea.Transform.ToMapY(screenY))) Redraw();
             }
 
             if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Ring || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
@@ -839,6 +915,8 @@ namespace Weland
         [GLib.ConnectBefore()]
         internal void OnSpecialKeyPressed(object obj, KeyPressEventArgs args)
         {
+            FlushPendingMotion();
+            if(window1.Focus is Entry || window1.Focus is TextView) { args.RetVal=false;return; }
             args.RetVal = true;
             if (PlatformDetection.IsMac)
             {
@@ -872,6 +950,7 @@ namespace Weland
                     }
                     break;
                 case Gdk.Key.Escape:
+                    editor.CancelLine();
                     editor.CancelPaste();
                     editor.CancelBox();
                     editor.CancelSelectionBox();
@@ -930,6 +1009,7 @@ namespace Weland
 
         internal void OnKeyPressed(object obj, KeyPressEventArgs args)
         {
+            if(window1.Focus is Entry || window1.Focus is TextView)return;
             if ((args.Event.State & (ModifierType.ControlMask | (PlatformDetection.IsMac ? ModifierType.MetaMask : 0))) != 0 &&
                 (args.Event.Key == Gdk.Key.c || args.Event.Key == Gdk.Key.C || args.Event.Key == Gdk.Key.v || args.Event.Key == Gdk.Key.V))
             {
@@ -1202,7 +1282,60 @@ namespace Weland
             }
         }
 
-        public void OpenFile(string filename)
+        static List<string> RecentMaps()
+        {
+            var paths=new List<string>();
+            foreach(string value in Weland.Settings.GetSetting("RecentMaps/Paths", "").Split(';')) {
+                if(string.IsNullOrEmpty(value))continue;
+                try {
+                    string path=System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value));
+                    if(!string.IsNullOrWhiteSpace(path) && !paths.Contains(path))paths.Add(path);
+                } catch(FormatException) { }
+            }
+            return paths.Take(12).ToList();
+        }
+
+        static void RememberRecentMap(string filename)
+        {
+            string path=Path.GetFullPath(filename);
+            var paths=RecentMaps();
+            paths.RemoveAll(p=>string.Equals(p,path,PlatformDetection.IsWindows?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal));
+            paths.Insert(0,path);
+            Weland.Settings.PutSetting("RecentMaps/Paths",string.Join(";",paths.Take(12).Select(p=>Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(p)))));
+        }
+
+        public void ShowStartup()
+        {
+            using var welcome=new Dialog("Welcome to Forge Ahead",window1,DialogFlags.Modal,
+                "Open another map…",ResponseType.Accept,"New Map",ResponseType.Yes);
+            welcome.SetDefaultSize(580,380);
+            welcome.GetWidgetForResponse((int)ResponseType.Yes).StyleContext.AddClass("suggested-action");
+            var panel=new Box(Orientation.Vertical,8) { Margin=14 };
+            panel.PackStart(new Label("Recently opened maps") { Xalign=0 },false,false,0);
+            var list=new Box(Orientation.Vertical,4);
+            var recent=RecentMaps();
+            if(recent.Count==0)list.PackStart(new Label("Maps you open or save will appear here.") { Xalign=0 },false,false,0);
+            foreach(string filename in recent) {
+                var button=new Button { TooltipText=filename };
+                var labels=new Box(Orientation.Vertical,2) { Margin=6 };
+                labels.PackStart(new Label(Path.GetFileName(filename)+(File.Exists(filename)?"":" (missing)")) { Xalign=0,Ellipsize=Pango.EllipsizeMode.End },false,false,0);
+                labels.PackStart(new Label(Path.GetDirectoryName(filename)) { Xalign=0,Ellipsize=Pango.EllipsizeMode.Middle },false,false,0);
+                button.Add(labels);
+                button.Clicked+=(o,e)=> { if(OpenFile(filename))welcome.Respond(ResponseType.Close); };
+                list.PackStart(button,false,false,0);
+            }
+            var scroll=new ScrolledWindow { HscrollbarPolicy=PolicyType.Never,VscrollbarPolicy=PolicyType.Automatic };
+            scroll.AddWithViewport(list);panel.PackStart(scroll,true,true,0);
+            welcome.ContentArea.PackStart(panel,true,true,0);welcome.ShowAll();
+            while(true) {
+                var response=(ResponseType)welcome.Run();
+                if(response==ResponseType.Yes) { NewLevel();break; }
+                if(response==ResponseType.Accept) { OnOpen(null,EventArgs.Empty);if(!string.IsNullOrEmpty(Filename))break;continue; }
+                break;
+            }
+        }
+
+        public bool OpenFile(string filename)
         {
             try
             {
@@ -1216,11 +1349,14 @@ namespace Weland
                 scenarioChanged = false;
                 editor.Changed = false;
                 LoadScenarioLevel(indexes[0]);
+                RememberRecentMap(filename);
+                return true;
             }
             catch (Exception e)
             {
                 using var dialog = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Error, ButtonsType.Close, "Could not open the scenario.");
                 dialog.SecondaryText = e.Message; dialog.Run();
+                return false;
             }
         }
 
@@ -1304,6 +1440,7 @@ namespace Weland
                     mapfile = output;
                     scenarioChanged = false;
                     Filename = d.Filename;
+                    RememberRecentMap(Filename);
 
                     Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));
 
@@ -1703,6 +1840,7 @@ namespace Weland
         void ChooseTool(Tool tool)
         {
             editor.Tool = tool;
+            if (lineOptions != null) { if (tool == Tool.Line) lineOptions.Show(); else lineOptions.Hide(); }
             if (selectOptions != null)
             {
                 if (tool == Tool.Select) selectOptions.Show();
@@ -2672,10 +2810,9 @@ namespace Weland
             if (polygonIndex != -1)
             {
                 // add a little LUAS to teleport the player
-                var script =
-                    String.Format(System.Globalization.CultureInfo.InvariantCulture,
-                        "Triggers = {{}}\nfunction Triggers.init()\nPlayers[0]:position({0}, {1}, {2}, {3})\nend\n",
-                        point.X / 1024.0, point.Y / 1024.0, Level.Polygons[polygonIndex].FloorHeight / 1024.0, polygonIndex);
+                var script = EmbeddedLua.VisualModeLocator(
+                    point.X / 1024.0, point.Y / 1024.0,
+                    Level.Polygons[polygonIndex].FloorHeight / 1024.0, polygonIndex);
                 toEditor.Directory[0] = EmbeddedLua.ForVisualMode(originalLevel, script);
             }
 

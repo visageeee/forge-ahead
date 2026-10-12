@@ -7,7 +7,30 @@ namespace Weland
     public class CairoDrawer : Drawer
     {
 
-        public Context Context { get; }
+        readonly Context context;
+        // Flush before callers paint text or images directly onto the context.
+        public Context Context { get { Flush();return context; } }
+        enum BatchKind { None, Stroke, Fill }
+        BatchKind batchKind;
+        Color batchColor;
+        double batchWidth;
+        int batchItems;
+
+        void BeginBatch(BatchKind kind,Color color,double width=0)
+        {
+            if(batchKind!=kind || batchColor.R!=color.R || batchColor.G!=color.G || batchColor.B!=color.B || batchWidth!=width || batchItems>=2048)Flush();
+            if(batchKind==BatchKind.None) { context.NewPath();batchKind=kind;batchColor=color;batchWidth=width; }
+            batchItems++;
+        }
+
+        public void Flush()
+        {
+            if(batchKind==BatchKind.None)return;
+            context.Save();context.SetSourceRGB(batchColor.R,batchColor.G,batchColor.B);
+            if(batchKind==BatchKind.Stroke) { context.LineWidth=batchWidth;context.Stroke(); }
+            else context.Fill();
+            context.Restore();batchKind=BatchKind.None;batchItems=0;
+        }
 
         readonly double lineWidth;
         readonly double vertexSize;
@@ -18,7 +41,7 @@ namespace Weland
             {
                 context.Antialias = Antialias.None;
             }
-            Context = context;
+            this.context = context;
             this.lineWidth = lineWidth;
             this.vertexSize = vertexSize;
         }
@@ -91,43 +114,27 @@ namespace Weland
 
         public override void Clear(Color c)
         {
-            Context.Save();
+            Flush();
+            context.Save();
 
-            Context.SetSourceRGB(c.R, c.G, c.B);
-            Context.Paint();
+            context.SetSourceRGB(c.R, c.G, c.B);
+            context.Paint();
 
-            Context.Restore();
+            context.Restore();
         }
 
         public override void DrawPoint(Color c, Point p)
         {
-            Context.Save();
-
-            double radius = vertexSize / 2;
-            Context.Rectangle(p.X + 0.5 - radius, p.Y + 0.5 - radius, vertexSize, vertexSize);
-            Context.SetSourceRGBA(c.R, c.G, c.B, 1.0);
-            Context.Fill();
-
-            Context.Restore();
+            BeginBatch(BatchKind.Fill,c);
+            double radius=vertexSize/2;
+            context.Rectangle(p.X+0.5-radius,p.Y+0.5-radius,vertexSize,vertexSize);
         }
 
         public override void DrawGridIntersect(Color c, Point p)
         {
-            Context.Save();
-
-            Context.MoveTo(new PointD(p.X - 0.5, p.Y + 0.5));
-            Context.LineTo(new PointD(p.X + 1.5, p.Y + 0.5));
-            Context.ClosePath();
-
-            Context.MoveTo(new PointD(p.X + 0.5, p.Y - 0.5));
-            Context.LineTo(new PointD(p.X + 0.5, p.Y + 1.5));
-            Context.ClosePath();
-
-            Context.SetSourceRGB(c.R, c.G, c.B);
-            Context.LineWidth = 1.0;
-            Context.Stroke();
-
-            Context.Restore();
+            BeginBatch(BatchKind.Stroke,c,1);
+            context.MoveTo(p.X-0.5,p.Y+0.5);context.LineTo(p.X+1.5,p.Y+0.5);context.ClosePath();
+            context.MoveTo(p.X+0.5,p.Y-0.5);context.LineTo(p.X+0.5,p.Y+1.5);context.ClosePath();
         }
 
         public override void DrawLine(Color c, Point p1, Point p2)
@@ -142,73 +149,62 @@ namespace Weland
 
         void StrokeLine(Color c, Point p1, Point p2, double width)
         {
-            Context.Save();
-
-            Context.MoveTo(new PointD(p1.X + 0.5, p1.Y + 0.5));
-            Context.LineTo(new PointD(p2.X + 0.5, p2.Y + 0.5));
-            Context.ClosePath();
-            Context.SetSourceRGB(c.R, c.G, c.B);
-            Context.LineWidth = width;
-            Context.Stroke();
-
-            Context.Restore();
+            BeginBatch(BatchKind.Stroke,c,width);
+            context.MoveTo(p1.X+0.5,p1.Y+0.5);context.LineTo(p2.X+0.5,p2.Y+0.5);context.ClosePath();
         }
 
         void OutlinePolygon(List<Point> points)
         {
-            Context.MoveTo(new PointD(points[0].X + 0.5, points[0].Y + 0.5));
+            context.MoveTo(new PointD(points[0].X + 0.5, points[0].Y + 0.5));
             for (int i = 1; i < points.Count; ++i)
             {
-                Context.LineTo(new PointD(points[i].X + 0.5, points[i].Y + 0.5));
+                context.LineTo(new PointD(points[i].X + 0.5, points[i].Y + 0.5));
             }
-            Context.ClosePath();
+            context.ClosePath();
         }
 
         public override void FillPolygon(Color c, List<Point> points)
         {
-            Context.Save();
-
+            BeginBatch(BatchKind.Fill,c);
             OutlinePolygon(points);
-            Context.SetSourceRGB(c.R, c.G, c.B);
-            Context.Fill();
-
-            Context.Restore();
         }
 
         public override void FillStrokePolygon(Color fill, Color stroke, List<Point> points, bool dashed)
         {
-            Context.Save();
+            Flush();
+            context.Save();
 
             OutlinePolygon(points);
-            Context.SetSourceRGB(fill.R, fill.G, fill.B);
-            Context.FillPreserve();
+            context.SetSourceRGB(fill.R, fill.G, fill.B);
+            context.FillPreserve();
 
             if (dashed)
             {
-                Context.SetDash(new double[] { 2.0, 2.0 }, 0);
+                context.SetDash(new double[] { 2.0, 2.0 }, 0);
             }
-            Context.SetSourceRGB(stroke.R, stroke.G, stroke.B);
-            Context.LineWidth = 1.0;
-            Context.Stroke();
+            context.SetSourceRGB(stroke.R, stroke.G, stroke.B);
+            context.LineWidth = 1.0;
+            context.Stroke();
 
-            Context.Restore();
+            context.Restore();
         }
 
         public override void TexturePolygon(ShapeDescriptor d, List<Point> points)
         {
-            Context.Save();
+            Flush();
+            context.Save();
 
             OutlinePolygon(points);
             using (SurfacePattern pattern = new SurfacePattern(cache.GetSurface(d)))
             {
                 pattern.Extend = Cairo.Extend.Repeat;
-                Context.SetSource(pattern);
-                Context.Fill();
+                context.SetSource(pattern);
+                context.Fill();
             }
-            Context.Restore();
+            context.Restore();
         }
 
-        public override void Dispose() { }
+        public override void Dispose() { Flush(); }
 
     }
 }

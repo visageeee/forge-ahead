@@ -36,6 +36,9 @@ namespace Weland
         public const int Size = 128;
         public const int MaxVertexCount = 8;
 
+        public string LuaTriggerCode="";
+        public bool LuaTriggerEnabled, LuaTriggerOnce;
+
         public PolygonType Type;
         public ushort Flags;
         public short Permutation = -1;

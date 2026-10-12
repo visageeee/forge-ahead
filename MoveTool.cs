@@ -73,7 +73,7 @@ namespace Weland
                 if (owner == -1) return;
             }
             if (!undoSet) { SetUndo(); undoSet = true; }
-            foreach (short index in movePoints) TranslatePoint(index,dx,dy);
+            TranslatePoints(movePoints,dx,dy);
             foreach (MapObject obj in moveObjects)
             {
                 TranslateObject(obj,dx,dy);

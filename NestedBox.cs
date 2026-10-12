@@ -359,6 +359,7 @@ namespace Weland
 
         static void CopyBoxSettings(Polygon source, Polygon target)
         {
+            target.LuaTriggerCode=source.LuaTriggerCode;target.LuaTriggerEnabled=source.LuaTriggerEnabled;target.LuaTriggerOnce=source.LuaTriggerOnce;
             target.Flags = source.Flags;
             target.FloorHeight = source.FloorHeight; target.CeilingHeight = source.CeilingHeight;
             target.FloorTexture = source.FloorTexture; target.CeilingTexture = source.CeilingTexture;

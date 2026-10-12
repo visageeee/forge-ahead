@@ -22,14 +22,16 @@ The enhancements in this fork are developed by using AI coding tools. Feature di
 - **Circle tool:** draw many-sided polygons with a configurable side count,
   including insets into existing polygons.
 - **Tessellation:** drag out connected patterns of triangles, squares, hexagons,
-  or octagons with square fillers, using a chosen edge length.
+  octagons with square fillers, or Penrose thin and thick rhombi, using a chosen
+  edge length.
 - **Ring tool:** create circular or elliptical rings with up to 128 outer sides
   and multiple connected inner rings. Rings are built from convex sectors so
   individual polygons remain within the engine's eight-vertex limit.
 - **Stairs:** add stepped floor heights to rings and tessellated patterns. Ring
   heights progress clockwise; ceilings can stay fixed or follow the floor.
 - **Line cuts:** attach new vertices to existing lines and split polygons with
-  the Line tool.
+  the Line tool. An optional split-all mode cuts every crossed polygon, creates
+  shared intersection vertices, and connects the path through empty gaps.
 
 ### Selection and editing
 
@@ -52,6 +54,9 @@ The enhancements in this fork are developed by using AI coding tools. Feature di
 - Open, switch between, edit, and save multiple maps inside an already **merged scenario**.
 - **Visual terminal editor** with scalable previews, page editing, and picture
   import while preserving image proportions.
+- **Polygon Lua triggers:** assign entry code from the Select sidebar, with
+  optional once-per-level activation and automatic embedding. Categorized
+  action presets cover ammo, healing, sounds, monsters, lights, doors and more.
 - **Embed Lua scripts** in individual levels, with scripts preserved during
   visual-mode round trips.
 - Export **MML** for extra texture/scenery collections and custom fog settings.

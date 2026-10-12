@@ -30,6 +30,11 @@ namespace Weland
             contents.PackStart(row, false, false, 0);
             var tessellate = new CheckButton("Tessellate") { Active = editor.CircleTessellationEnabled };
             contents.PackStart(tessellate, false, false, 0);
+            var patternRow=new Box(Orientation.Horizontal,8);
+            patternRow.PackStart(new Label("Pattern") { Xalign=0 },true,true,0);
+            var pattern=new ComboBoxText();pattern.AppendText("Regular polygons");pattern.AppendText("Penrose rhombs");
+            pattern.Active=(int)editor.CirclePattern;
+            patternRow.PackStart(pattern,false,false,0);contents.PackStart(patternRow,false,false,0);
             var sizeRow = new Box(Orientation.Horizontal, 8);
             sizeRow.PackStart(new Label("Edge length (WU)") { Xalign = 0 }, true, true, 0);
             var size = new SpinButton(1.0 / 64, 8, 0.125) {
@@ -39,12 +44,18 @@ namespace Weland
             contents.PackStart(sizeRow, false, false, 0);
             var help = new Label("") { Xalign = 0, LineWrap = true, MaxWidthChars = 28 };
             void UpdateHelp() {
-                sizeRow.Sensitive = tessellate.Active;
+                sizeRow.Sensitive = patternRow.Sensitive = tessellate.Active;
+                row.Sensitive = !tessellate.Active || pattern.Active==0;
                 updateStairs?.Invoke();
                 help.Text = tessellate.Active
-                    ? "Drag to expand a tile patch.\n3, 4, or 6 sides tile directly.\n8 sides adds square fillers.\nExisting matching tiles are reused."
+                    ? (pattern.Active==1 ? "Drag to expand a Penrose patch.\nThin and thick four-sided rhombs.\nEdge length controls tile size.\nComplete tiles make a jagged border." : "Drag to expand a tile patch.\n3, 4, or 6 sides tile directly.\n8 sides adds square fillers.\nExisting matching tiles are reused.")
                     : "Drag opposite corners.\nHold Shift for a circle.\n3–8 sides per polygon.\nUncheck Filled for an outline.";
             }
+            pattern.Changed+=(sender,args)=> {
+                editor.CirclePattern=(TessellationPattern)pattern.Active;
+                Weland.Settings.PutSetting("Tools/CirclePattern",(int)editor.CirclePattern);
+                UpdateHelp();
+            };
             tessellate.Toggled += (sender, args) => {
                 editor.CircleTessellationEnabled = tessellate.Active;
                 Weland.Settings.PutSetting("Tools/CircleTessellation", tessellate.Active);
@@ -76,12 +87,14 @@ namespace Weland
             sidebar.PackStart(boxOptions, false, false, 0);
             SetupRingOptions(sidebar);
             SetupSelectOptions(sidebar);
+            SetupLineOptions(sidebar);
             SetupHistory(sidebar);
             grid1.Attach(sidebar, 5, 0, 1, 1);
             sidebar.ShowAll();
             circleOptions.Hide();
             boxOptions.Hide();
             ringOptions.Hide();
+            if (editor.Tool == Tool.Line) lineOptions.Show(); else lineOptions.Hide();
             if (editor.Tool == Tool.Select) selectOptions.Show();
             else selectOptions.Hide();
         }

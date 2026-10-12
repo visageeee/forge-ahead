@@ -107,8 +107,10 @@ namespace Weland
             StartupTrace("opening map");
             if (args.Length == 1 && !args[0].StartsWith("-psn_"))
                 window.OpenFile(args[0]);
-            else
+            else {
                 window.NewLevel();
+                window.ShowStartup();
+            }
 
             StartupTrace("running GTK event loop");
             Application.Run();

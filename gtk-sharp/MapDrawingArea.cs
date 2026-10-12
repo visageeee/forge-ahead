@@ -134,6 +134,7 @@ namespace Weland
         public Drawer.Color selectedPolygonColor;
         public Drawer.Color destinationPolygonColor;
         public Drawer.Color polygonColor;
+        readonly Drawer.Color luaTriggerColor = new Drawer.Color(1.0, 0.65, 0.82);
         public Drawer.Color invalidPolygonColor;
         public Drawer.Color gridLineColor;
         public Drawer.Color gridPointColor;
@@ -205,7 +206,7 @@ namespace Weland
                     if (code == CohenSutherland.Inside && Filter(polygon))
                     {
                         DrawPolygon((short)i, Selection.Polygons.Contains((short)i) ? PolygonColor.Selected :
-                            (Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Polygon == i ? PolygonColor.Hover : PolygonColor.Normal), cr);
+                            (Editor != null && (Editor.Tool == Tool.Select || Editor.Tool == Tool.Line) && Editor.Hover.Polygon == i ? PolygonColor.Hover : PolygonColor.Normal), cr);
                     }
                 }
 
@@ -256,7 +257,7 @@ namespace Weland
                     {
                         if (Level.FilterLine(Filter, line))
                         {
-                            DrawLine(line, Selection.Lines.Contains((short)lineIndex), Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Line == lineIndex);
+                            DrawLine(line, Selection.Lines.Contains((short)lineIndex), Editor != null && (Editor.Tool == Tool.Select || Editor.Tool == Tool.Line) && Editor.Hover.Line == lineIndex);
                         }
                     }
                 }
@@ -271,7 +272,7 @@ namespace Weland
                     if (Level.FilterPoint(Filter, i) && Points[i] == CohenSutherland.Inside)
                     {
                         if (Selection.Points.Contains(i)) DrawFatPoint(selectedLineColor, Level.Endpoints[i]);
-                        else if (Editor != null && Editor.Tool == Tool.Select && Editor.Hover.Point == i && Selection.Point != i)
+                        else if (Editor != null && (Editor.Tool == Tool.Select || Editor.Tool == Tool.Line) && Editor.Hover.Point == i && Selection.Point != i)
                             DrawFatPoint(hoverColor, Level.Endpoints[i]);
                         else DrawPoint(Level.Endpoints[i]);
                     }
@@ -468,9 +469,13 @@ namespace Weland
 
             if (!Grid.UseCustomGrid)
             {
+                // Thin grids become an expensive solid haze when zoomed out.
+                // Decimate only the display; snapping still uses Grid.Resolution.
+                int displayResolution=Math.Max(1,(int)Grid.Resolution);
+                while(displayResolution*Transform.Scale<8 && displayResolution<32768)displayResolution*=2;
                 //the original code
                 // draw horizontal map lines
-                for (int j = (Top / Grid.Resolution) * Grid.Resolution; j < Bottom; j += Grid.Resolution)
+                for (int j = (Top / displayResolution) * displayResolution; j < Bottom; j += displayResolution)
                 {
                     p1.X = Left;
                     p1.Y = (short)j;
@@ -481,7 +486,7 @@ namespace Weland
                 }
 
                 // draw vertical map lines
-                for (int i = (Left / Grid.Resolution) * Grid.Resolution; i < Right; i += Grid.Resolution)
+                for (int i = (Left / displayResolution) * displayResolution; i < Right; i += displayResolution)
                 {
                     p1.X = (short)i;
                     p1.Y = Top;
@@ -492,7 +497,8 @@ namespace Weland
                 }
 
                 // draw grid intersects
-                wu = Math.Max(1024, (int)Grid.Resolution);
+                wu = Math.Max(1024, displayResolution);
+                while(wu*Transform.Scale<16 && wu<32768)wu*=2;
                 for (int i = (Left / wu) * wu; i < Right; i += wu)
                 {
                     for (int j = (Top / wu) * wu; j < Bottom; j += wu)
@@ -509,7 +515,9 @@ namespace Weland
             //x(t) = lpx + t*c ,  y(t) = lpy - t*s   for lines that are horizontal when the rotation angle is 0, and
             //x(t) = lpx + t*s ,  y(t) = lpy + t*c   for the perpendicular lines.
 
-            r = (int)(Grid.Resolution * Grid.Scale);
+            int displayStride=1;
+            r=Math.Max(1,(int)(Grid.Resolution*Grid.Scale));
+            while(r*Transform.Scale<8 && r<32768) { r*=2;displayStride*=2; }
             c = Math.Cos(Grid.Rotation * 2 * Math.PI / 360);
             s = Math.Sin(Grid.Rotation * 2 * Math.PI / 360);
             lpx = Grid.Center.X; lpy = Grid.Center.Y;
@@ -550,7 +558,8 @@ namespace Weland
             //also draw intersections while drawing lines since it's easier to do that here than afterward
             //fist calculate the number of lines between drawn intersections
             wu = Math.Max(1024, (int)Grid.Resolution);
-            intskip = Math.Max(1, wu / Grid.Resolution);
+            intskip = Math.Max(1, wu / Math.Max(1,Grid.Resolution*displayStride));
+            while(r*intskip*Transform.Scale<16 && intskip<32768)intskip*=2;
             //note that i use Grid.Resolution instead of r here because the scaling factor should multiply wu, which would then cancel in the division
 
             lpx = Grid.Center.X; lpy = Grid.Center.Y;
@@ -735,6 +744,10 @@ namespace Weland
                 {
                     drawer.FillPolygon(invalidPolygonColor, points);
                 }
+                else if (polygon.LuaTriggerEnabled && !string.IsNullOrWhiteSpace(polygon.LuaTriggerCode))
+                {
+                    drawer.FillPolygon(luaTriggerColor, points);
+                }
                 else
                 {
                     drawer.FillPolygon(polygonColor, points);
@@ -743,8 +756,9 @@ namespace Weland
 
             if (Mode == DrawMode.Draw && polygon.Type == PolygonType.Platform)
             {
+                ((CairoDrawer)drawer).Flush();
                 Drawer.Point center = Transform.ToScreenPoint(Level.PolygonCenter(polygon));
-                Layout layout = new Layout(PangoContext);
+                using Layout layout = new Layout(PangoContext);
                 layout.SetMarkup(String.Format("{0}", polygon_index));
                 layout.GetPixelSize(out int width, out int height);
                 cr.Save();
@@ -791,6 +805,7 @@ namespace Weland
                 drawer.FillPolygon(new Drawer.Color(1, 1, 0), points);
             }
 
+            ((CairoDrawer)drawer).Flush();
             Gdk.CairoHelper.SetSourcePixbuf(context, image, x, y);
             context.Paint();
         }
@@ -865,9 +880,10 @@ namespace Weland
 
         void DrawAnnotation(Annotation note, bool selected, Cairo.Context cr)
         {
+            ((CairoDrawer)drawer).Flush();
             int X = (int)Transform.ToScreenX(note.X);
             int Y = (int)Transform.ToScreenY(note.Y);
-            Layout layout = new Layout(PangoContext);
+            using Layout layout = new Layout(PangoContext);
             layout.SetMarkup(note.Text);
             layout.GetPixelSize(out int width, out int height);
             cr.Save();

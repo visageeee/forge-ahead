@@ -7,6 +7,17 @@ group selection, move/rotate/scale tools, configurable hover highlights, undo
 history, embedded Lua, fog/collection MML export, and a terminal editor with
 picture import and preview.
 
+### New in v0.4.0
+
+- Polygon Lua entry triggers with reusable actions for ammo, healing, sounds,
+  monsters, lights, platforms, messages and fog.
+- Repeating monster spawners with frequency, total limit and indefinite options.
+- Smooth fog transitions, named action dropdowns and Lua syntax coloring.
+- Lua scripts and polygon triggers run when entering visual mode.
+- Pink trigger polygons and a refined script editor sidebar.
+- Recent-map startup window with New Map and Open options.
+- Penrose tessellation, improved line cutting/snapping, and smoother map interaction.
+
 ### Downloads
 
 - **Windows x64:** extract `Forge-Ahead-win-x64.zip` and open `ForgeAhead.exe` inside its folder.

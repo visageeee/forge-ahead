@@ -71,16 +71,27 @@ namespace Weland
         public static Wadfile.DirectoryEntry ForVisualMode(Wadfile.DirectoryEntry original, string locator)
         {
             var temporary = original.Clone();
-            temporary.Chunks.Remove(Tag);
-            if (locator != null)
-                temporary.Chunks[Tag] = Write(new[] { new EmbeddedLuaScript {
+            if (locator != null) {
+                temporary.Chunks.TryGetValue(Tag,out byte[] existing);
+                var scripts=Read(existing);
+                scripts.Add(new EmbeddedLuaScript {
                     Name = "Weland Visual Mode Locator", Flags = 4, Text = locator
-                } });
+                });
+                temporary.Chunks[Tag]=Write(scripts);
+            }
             return temporary;
+        }
+
+        public static string VisualModeLocator(double x,double y,double z,int polygon)
+        {
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "Triggers = Triggers or {{}}\nlocal previous_init = Triggers.init\nfunction Triggers.init(restoring)\n  if not restoring then Players[0]:position({0}, {1}, {2}, {3}) end\n  if previous_init then previous_init(restoring) end\nend\n",x,y,z,polygon);
         }
 
         public static void RestoreAfterVisualMode(Wadfile.DirectoryEntry original, Wadfile.DirectoryEntry returned)
         {
+            if(original.Chunks.TryGetValue(PolygonLua.Tag,out byte[] triggerData))returned.Chunks[PolygonLua.Tag]=(byte[])triggerData.Clone();
+            else returned.Chunks.Remove(PolygonLua.Tag);
             if (original.Chunks.TryGetValue(Tag, out byte[] bytes)) returned.Chunks[Tag] = (byte[])bytes.Clone();
             else returned.Chunks.Remove(Tag);
         }

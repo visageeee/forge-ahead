@@ -155,3 +155,9 @@ shapes/PaveTextureSelection.cs
 LineCut.cs
 
 level/ScenarioMaps.cs
+
+gtk-sharp/LineOptions.cs
+
+level/PolygonLua.cs
+
+level/PolygonLuaActions.cs

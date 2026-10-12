@@ -34,6 +34,25 @@ namespace Weland
             return polygons;
         }
 
+        public short[] SelectedLuaPolygons() => Selection.Polygons.Concat(Selection.Polygon==-1 ? Array.Empty<short>() : new[]{Selection.Polygon}).Distinct().OrderBy(i=>i).ToArray();
+
+        public bool SetSelectedPolygonLua(string code,bool enabled,bool once,out string reason)
+        {
+            PrepareHistoryNavigation();reason=null;var selected=SelectedLuaPolygons();
+            if(selected.Length==0) { reason="Select at least one polygon first.";return false; }
+            try { PolygonLua.Validate(code);if(enabled && string.IsNullOrWhiteSpace(code))throw new ArgumentException("Enter Lua code before enabling the trigger."); }
+            catch(Exception ex) { reason=ex.Message;return false; }
+            if(selected.All(i=>Level.Polygons[i].LuaTriggerCode==code && Level.Polygons[i].LuaTriggerEnabled==enabled && Level.Polygons[i].LuaTriggerOnce==once))return true;
+            // Validate serialization and reserved script names before creating history.
+            try {
+                var trial=new Level();trial.Load(Level.Save().Clone());
+                foreach(short i in selected) { var p=trial.Polygons[i];p.LuaTriggerCode=code;p.LuaTriggerEnabled=enabled;p.LuaTriggerOnce=once; }
+                var saved=trial.Save().Clone();SetUndo("Edit polygon Lua triggers");Level.Load(saved);
+            }
+            catch(Exception ex) { reason=ex.Message;return false; }
+            Changed=Dirty=RedrawAll=true;return true;
+        }
+
         public bool ShiftSelectedHeights(int amount, bool floor, bool ceiling, out string reason)
         {
             PrepareHistoryNavigation(); reason = null;

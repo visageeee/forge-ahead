@@ -394,19 +394,21 @@ class BoxToolTests
             editor.SetUndo("Remove level Lua scripts"); level.Chunks.Remove(EmbeddedLua.Tag); editor.CommitHistory(true);
             editor.Undo(); Check(level.Chunks.ContainsKey(EmbeddedLua.Tag), "Script removal cannot undo");
         });
-        Test("embedded Lua protected during visual mode", () => {
+        Test("embedded Lua runs in visual mode and restores unchanged on return", () => {
             var level = new Level(); Box(level,0,0,100,100);
             byte[] bytes = EmbeddedLua.Write(new[] { new EmbeddedLuaScript { Name = "kill-floor.lua", Text = "Triggers = {}\n" } });
             level.Chunks[EmbeddedLua.Tag] = bytes;
             var original = level.Save().Clone();
             var editing = EmbeddedLua.ForVisualMode(original, "Triggers = {}\n");
-            Check(EmbeddedLua.Read(editing.Chunks[EmbeddedLua.Tag]).Single().Name == "Weland Visual Mode Locator", "Gameplay script runs in visual mode");
+            var scripts=EmbeddedLua.Read(editing.Chunks[EmbeddedLua.Tag]);
+            Check(scripts.Count==2 && scripts[0].Name=="kill-floor.lua" && scripts[1].Name=="Weland Visual Mode Locator", "Gameplay scripts or locator lost/reordered");
+            Check(scripts[0].Source.SequenceEqual(EmbeddedLua.Read(bytes)[0].Source),"Gameplay source changed");
             Check(original.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes) && level.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes), "Preparing visual mode changed map Lua");
             EmbeddedLua.RestoreAfterVisualMode(original, editing);
             Check(editing.Chunks[EmbeddedLua.Tag].SequenceEqual(bytes), "Returning lost gameplay scripts");
             editing.Chunks[EmbeddedLua.Tag][0] = 7;
             Check(original.Chunks[EmbeddedLua.Tag][0] == 0, "Returned Lua shares mutable storage");
-            Check(!EmbeddedLua.ForVisualMode(original, null).Chunks.ContainsKey(EmbeddedLua.Tag), "No-locator visual mode kept gameplay Lua");
+            Check(EmbeddedLua.ForVisualMode(original, null).Chunks[EmbeddedLua.Tag].SequenceEqual(bytes), "No-locator visual mode lost gameplay Lua");
             original.Chunks.Remove(EmbeddedLua.Tag); editing = EmbeddedLua.ForVisualMode(original, "Triggers = {}\n");
             EmbeddedLua.RestoreAfterVisualMode(original, editing);
             Check(!editing.Chunks.ContainsKey(EmbeddedLua.Tag), "Locator leaked into map without Lua");
@@ -1362,6 +1364,52 @@ class BoxToolTests
                         Check(Area2(loaded)==Area2(plan),"Saving changed tile area");
                     }
         });
+        Test("Penrose rhombs share convex boundaries without overlaps or holes", () => {
+            foreach(int size in new[]{16,17,1000})foreach(Point direction in new[]{P(-4,-4),P(-4,4),P(4,-4),P(4,4),P(0,0),P(4,0),P(0,4)}) {
+                Check(PenroseTessellation.TryBuild(P(-2000,-2000),P(-2000+direction.X*size,-2000+direction.Y*size),size,out var tiles,out var steps,out string reason),reason);
+                Check(tiles.Count>0 && tiles.All(t=>t.Count==4) && steps.Count==tiles.Count,"Missing Penrose rhombs or stair steps");
+                long Cross(Point a,Point b,Point c)=>(long)(b.X-a.X)*(c.Y-a.Y)-(long)(b.Y-a.Y)*(c.X-a.X);
+                bool Separate(System.Collections.Generic.List<Point> a,System.Collections.Generic.List<Point> b)=>Enumerable.Range(0,4).Any(i=>b.All(p=>Cross(a[i],a[(i+1)%4],p)<=0));
+                for(int i=0;i<tiles.Count;i++)for(int j=i+1;j<tiles.Count;j++)Check(Separate(tiles[i],tiles[j]) || Separate(tiles[j],tiles[i]),"Penrose tiles overlap");
+                var level=new Level();Check(level.PlanCircleTessellation(tiles,out var plan,out _,out int added,out reason),reason);Validate(plan);
+                Check(added==tiles.Count && plan.Endpoints.Count-plan.Lines.Count+plan.Polygons.Count==1,"Penrose patch has gaps or disconnected geometry");
+                var seen=new System.Collections.Generic.HashSet<short>{0};bool changed=true;
+                while(changed) { changed=false;foreach(var l in plan.Lines)if(l.ClockwisePolygonOwner!=-1 && l.CounterclockwisePolygonOwner!=-1 && (seen.Contains(l.ClockwisePolygonOwner) || seen.Contains(l.CounterclockwisePolygonOwner))) { changed|=seen.Add(l.ClockwisePolygonOwner);changed|=seen.Add(l.CounterclockwisePolygonOwner); } }
+                Check(seen.Count==tiles.Count,"Penrose tiles only touch at corners or are disconnected");
+                var loaded=new Level();loaded.Load(plan.Save().Clone());Validate(loaded);
+                Check(Area2(plan)==Area2(loaded),"Penrose save/load area changed");
+                if(size==1000 && direction.X!=0 && direction.Y!=0) {
+                    var areas=tiles.Select(t=>Math.Abs(Cross(t[0],t[1],t[2])+Cross(t[0],t[2],t[3]))/(double)(size*size)).ToArray();
+                    Check(areas.Any(v=>Math.Abs(v-2*Math.Sin(Math.PI/5))<0.01) && areas.Any(v=>Math.Abs(v-2*Math.Sin(2*Math.PI/5))<0.01),"Penrose thin/thick rhomb areas are wrong");
+                }
+            }
+        });
+        Test("Penrose preview filled outlines stairs and undo reuse one stable patch", () => {
+            foreach(bool filled in new[]{false,true}) {
+                var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;editor.CircleTessellationEnabled=true;
+                editor.CirclePattern=TessellationPattern.PenroseRhombs;editor.CircleTileSize=256;editor.CircleFilled=filled;
+                editor.CircleStairs=filled;editor.CircleStairStart=0;editor.CircleStairStep=32;editor.CircleStairCeiling=2048;editor.CircleCeilingFollows=true;
+                string before=CanonicalSnapshot(level);editor.StartCircle(0,0);editor.UpdateCircle(768,768,false);
+                Check(editor.CircleMessage==null && editor.CircleTiles.Count>1 && CanonicalSnapshot(level)==before,"Penrose preview failed or changed map: "+editor.CircleMessage);
+                editor.FinishCircle(768,768,false);Check(editor.CircleMessage==null,"Penrose commit failed: "+editor.CircleMessage);Validate(level);
+                Check(filled?level.Polygons.Count>1 && level.Polygons.Select(p=>p.FloorHeight).Distinct().Count()>1:level.Polygons.Count==0 && level.Lines.Count>4,"Filled/stairs/outline behavior failed");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Penrose undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Penrose redo failed");
+                int history=editor.HistoryLabels.Count;editor.StartCircle(0,0);editor.FinishCircle(768,768,false);
+                Check(editor.CircleMessage==null && CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==history,"Penrose repeat duplicates tiles/history");
+                editor.StartCircle(0,0);editor.CirclePattern=TessellationPattern.Regular;Check(!editor.DrawingCircle,"Pattern change left stale preview");
+            }
+            var empty=new Level();var e=Editor(empty);e.Tool=Tool.Circle;e.CircleTessellationEnabled=true;e.CirclePattern=TessellationPattern.PenroseRhombs;e.CircleTileSize=256;
+            e.StartCircle(0,0);e.FinishCircle(512,512,false);string original=CanonicalSnapshot(empty);
+            e.StartCircle(10,10);e.FinishCircle(522,522,false);Check(e.CircleMessage!=null && CanonicalSnapshot(empty)==original,"Overlapping Penrose patch changed map");
+            Check(PenroseTessellation.TryBuild(P(0,0),P(512,512),256,out var small,out _,out string buildReason),buildReason);
+            Check(PenroseTessellation.TryBuild(P(0,0),P(1024,1024),256,out var grown,out _,out buildReason),buildReason);
+            var fresh=new Level();Check(fresh.PlanCircleTessellation(small,out var initial,out _,out _,out buildReason),buildReason);
+            Check(initial.PlanCircleTessellation(grown,out var expanded,out _,out int added,out buildReason),buildReason);Validate(expanded);
+            Check(added==grown.Count-small.Count,"Growing Penrose patch changed existing tiles");
+            Check(!PenroseTessellation.TryBuild(P(0,0),P(14*256,14*256),256,out var capped,out _,out _) && capped.Count==0,"Penrose tile cap exceeded");
+            Check(!PenroseTessellation.TryBuild(P(0,0),P(10000,10000),16,out var oversized,out _,out _) && oversized.Count==0,"Oversized Penrose patch accepted");
+            Check(!PenroseTessellation.TryBuild(P(32700,32700),P(32750,32750),1000,out var outside,out _,out _) && outside.Count==0,"Penrose coordinates wrapped");
+        });
         Test("circle tessellation previews without changes and records one undo step", () => {
             var level=new Level();var editor=Editor(level);editor.Tool=Tool.Circle;
             editor.CircleSides=6;editor.CircleTileSize=1000;editor.CircleTessellationEnabled=true;
@@ -1887,6 +1935,303 @@ class BoxToolTests
             Check(level.Platforms.Count==2 && level.Polygons[2].Permutation==1 && level.Platforms[1].PolygonIndex==2 && level.Platforms[1].Speed==32 && level.Platforms[1].InitiallyActive && level.Platforms[1].Tag==7,"Platform settings/reference lost");
             Check(level.Polygons[3].Permutation==2 && level.Sides.Any(side=>side.PolygonIndex==3 && side.IsControlPanel && side.ControlPanelPermutation==2),"Internal teleport/switch reference lost");
             var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Platforms[1].PolygonIndex==2 && loaded.Polygons[3].Permutation==2,"Serialized reference lost");
+        });
+        Test("Split-all line crosses separated polygons and connects the full path", () => {
+            foreach(bool reverse in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,1000,1000);Box(level,2000,0,3000,1000);level.Pave();
+                level.Polygons[0].FloorHeight=128;level.Polygons[1].CeilingHeight=2048;
+                foreach(var side in level.Sides)side.Primary.Texture=(ShapeDescriptor)123;
+                level.NewObject(P(250,250),0);level.NewObject(P(250,750),0);
+                level.Annotations.Add(new Annotation{X=2500,Y=750,PolygonIndex=1,Text="cut"});
+                var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
+                short start=(short)(reverse?3500:-500),end=(short)(reverse?-500:3500);
+                editor.ButtonPress(start,500,EditorModifiers.None);editor.Motion(end,500,EditorModifiers.None);editor.ButtonRelease(end,500,EditorModifiers.None);Validate(level);
+                Check(editor.LineToolError==null && level.Polygons.Count==4 && level.Endpoints.Count==14,"Split-all missed polygons/vertices: "+editor.LineToolError);
+                var path=level.Lines.Where(l=>l.EndpointIndexes.All(i=>level.Endpoints[i].Y==500)).ToList();
+                Check(path.Count==5,"Full path through gaps/exterior not connected");
+                Check(level.Polygons.Count(p=>p.FloorHeight==128)==2 && level.Polygons.Count(p=>p.CeilingHeight==2048)==2,"Settings lost");
+                Check(level.Sides.All(side=>side.Primary.Texture.Equals((ShapeDescriptor)123)),"Wall textures lost");
+                Check(level.Objects[0].PolygonIndex!=level.Objects[1].PolygonIndex && level.Annotations[0].PolygonIndex>=0,"Contents not reassigned");
+                Check(editor.HistoryLabels.Count==2 && editor.HistoryLabels[1]=="Split intersected polygons","Cut not one history step");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Split-all undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Split-all redo failed");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Polygons.Count==4,"Split-all serialization lost polygons");
+                int count=editor.HistoryLabels.Count;editor.ButtonPress(start,500,EditorModifiers.None);editor.ButtonRelease(end,500,EditorModifiers.None);
+                Check(CanonicalSnapshot(level)==after && editor.HistoryLabels.Count==count,"Repeated path duplicated geometry/history");
+            }
+        });
+        Test("Split-all line handles shared walls corner hits and loose lines", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            level.NewLine(level.NewPoint(2500,0),level.NewPoint(2500,1000));
+            Check(level.CutPolygonsWithLine(P(-500,500),P(3000,500),out bool handled,out string reason,true) && handled,reason);Validate(level);
+            Check(level.Polygons.Count==4 && level.Endpoints.Count(p=>p.X==1000 && p.Y==500)==1 && level.Endpoints.Count(p=>p.X==2500 && p.Y==500)==1,"Shared or loose crossing not split once");
+            Check(level.Lines.Count(l=>l.EndpointIndexes.All(i=>level.Endpoints[i].X==2500))==2,"Loose line not split");
+            var corner=new Level();Box(corner,0,0,1000,1000);
+            Check(corner.CutPolygonsWithLine(P(-500,-500),P(1500,1500),out handled,out reason,true),reason);Validate(corner);
+            Check(corner.Polygons.Count==2 && corner.Endpoints.Count==6,"Corner cut duplicated vertices");
+        });
+        Test("Split-all line rejects incomplete paths and repairs fractional crossings", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
+            editor.ButtonPress(-500,500,EditorModifiers.None);editor.ButtonRelease(500,500,EditorModifiers.None);
+            Check(editor.LineToolError!=null && CanonicalSnapshot(level)==before && editor.HistoryLabels.Count==1,"Partial cut changed map/history");
+            var fractional=new Level();Box(fractional,0,0,1000,1000);
+            Check(fractional.CutPolygonsWithLine(P(-500,0),P(1500,777),out bool handled,out string reason,true),reason);Validate(fractional);
+            Check(fractional.Polygons.Count==2 && fractional.Endpoints.Contains(P(0,194)) && fractional.Endpoints.Contains(P(1000,583)),"Fractional edge hits not snapped to nearest coordinates");
+            editor.StartLine(-500,500);editor.UpdateLine(1500,500,false,false);editor.LineSplitAll=false;
+            Check(level.TemporaryLineStartIndex==-1 && CanonicalSnapshot(level)==before && !editor.CanUndo,"Changing option left a partial cut");
+            editor.ButtonPress(-500,500,EditorModifiers.None);editor.ButtonRelease(1500,500,EditorModifiers.None);
+            Check(editor.LineToolError!=null && CanonicalSnapshot(level)==before,"Disabled option allowed outside endpoints");
+        });
+        Test("Split-all line reuses collinear boundaries and splits paths without polygons", () => {
+            var level=new Level();Box(level,0,0,1000,1000);
+            Check(level.CutPolygonsWithLine(P(-500,0),P(1500,0),out bool handled,out string reason,true),reason);Validate(level);
+            Check(level.Polygons.Count==1 && level.Endpoints.Count==6 && level.Lines.Count==6,"Boundary path duplicated geometry");
+            var loose=new Level();loose.NewLine(loose.NewPoint(0,-500),loose.NewPoint(0,500));loose.NewPoint(500,0);
+            Check(loose.CutPolygonsWithLine(P(-1000,0),P(1000,0),out handled,out reason,true),reason);Validate(loose);
+            Check(loose.Lines.Count==5 && loose.Endpoints.Count(p=>p.X==0 && p.Y==0)==1,"Loose path missed crossings or existing point");
+        });
+        Test("Split-all line handles eight-sided limits and rolls back late failures", () => {
+            var corners=new[]{P(0,300),P(300,0),P(700,0),P(1000,300),P(1000,700),P(700,1000),P(300,1000),P(0,700)}.ToList();
+            var level=new Level();Check(level.CreateCirclePolygon(corners,out string reason),reason);string before=CanonicalSnapshot(level);
+            Check(!level.CutPolygonsWithLine(P(500,0),P(1500,0),out bool handled,out reason,true) && CanonicalSnapshot(level)==before,"Eight-vertex boundary overflow mutated map");
+            Check(level.CutPolygonsWithLine(P(-500,500),P(1500,500),out handled,out reason,true),reason);Validate(level);Check(level.Polygons.Count==2,"Octagon not split");
+            var late=new Level();Box(late,0,0,1000,1000);
+            Check(late.CreateCirclePolygon(corners.Select(p=>P(p.X+2000,p.Y+500)).ToList(),out reason),reason);
+            var editor=Editor(late);editor.Tool=Tool.Line;editor.LineSplitAll=true;before=CanonicalSnapshot(late);
+            editor.ButtonPress(-500,500,EditorModifiers.None);editor.ButtonRelease(2500,500,EditorModifiers.None);
+            Check(editor.LineToolError!=null && CanonicalSnapshot(late)==before && editor.HistoryLabels.Count==1,"Late loose-line failure retained polygon cuts");
+            editor.StartLine(-500,500);editor.UpdateLine(1500,500,false,false);editor.CancelLine();
+            Check(late.TemporaryLineStartIndex==-1 && CanonicalSnapshot(late)==before && editor.HistoryLabels.Count==1,"Cancel left pending vertices or history");
+        });
+        Test("Automatic cut snapping shares sloped edges and is drag-direction independent", () => {
+            foreach(bool reverse in new[]{false,true}) {
+                var level=new Level();
+                Check(level.CreateCirclePolygon(new[]{P(0,0),P(1000,0),P(1100,1000),P(0,1000)}.ToList(),out string reason),reason);
+                Check(level.CreateCirclePolygon(new[]{P(1000,0),P(2000,0),P(2000,1000),P(1100,1000)}.ToList(),out reason),reason);
+                Point a=P(-500,333),b=P(2500,779);
+                Check(level.CutPolygonsWithLine(reverse?b:a,reverse?a:b,out bool handled,out reason,true),reason);Validate(level);
+                Check(level.Polygons.Count==4 && level.Endpoints.Count(p=>p.Equals(P(1056,564)))==1,"Sloped shared edge snapped inconsistently");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+                var halves=new Level();Box(halves,0,0,1000,1000);Box(halves,1000,0,2000,1000);a=P(0,300);b=P(2000,701);
+                Check(halves.CutPolygonsWithLine(reverse?b:a,reverse?a:b,out handled,out reason),reason);Validate(halves);
+                Check(halves.Endpoints.Count(p=>p.Equals(P(1000,501)))==1 && halves.Polygons.Count==4,"Half-coordinate tie or standard-mode cut failed");
+            }
+        });
+        Test("Automatic cut snapping survives many diagonal paths with undo and no crossings", () => {
+            var random=new Random(9821);
+            for(int sample=0;sample<40;sample++) {
+                var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);Box(level,2000,0,3000,1000);
+                var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
+                short y0=(short)random.Next(100,900),y1=(short)random.Next(100,900);
+                editor.ButtonPress(-500,y0,EditorModifiers.None);editor.ButtonRelease(3500,y1,EditorModifiers.None);Validate(level);
+                Check(editor.LineToolError==null && level.Polygons.Count==6,"Diagonal snapping failed: "+editor.LineToolError);
+                long Cross(Point a,Point b,Point c)=>(long)(b.X-a.X)*(c.Y-a.Y)-(long)(b.Y-a.Y)*(c.X-a.X);
+                for(int i=0;i<level.Lines.Count;i++)for(int j=i+1;j<level.Lines.Count;j++) {
+                    var one=level.Lines[i];var two=level.Lines[j];Point a=level.Endpoints[one.EndpointIndexes[0]],b=level.Endpoints[one.EndpointIndexes[1]],c=level.Endpoints[two.EndpointIndexes[0]],d=level.Endpoints[two.EndpointIndexes[1]];
+                    Check(!(Math.Sign(Cross(a,b,c))*Math.Sign(Cross(a,b,d))<0 && Math.Sign(Cross(c,d,a))*Math.Sign(Cross(c,d,b))<0),"Adjusted segments cross existing edges");
+                }
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Automatic snapping undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Automatic snapping redo failed");
+            }
+        });
+        Test("Automatic cut snapping handles fractional loose-line hits and existing corner precision", () => {
+            var level=new Level();level.NewLine(level.NewPoint(100,-100),level.NewPoint(100,100));
+            Check(level.CutPolygonsWithLine(P(-100,0),P(300,101),out bool handled,out string reason,true),reason);Validate(level);
+            Check(level.Endpoints.Count(p=>p.Equals(P(100,51)))==1 && level.Lines.Count==4,"Fractional loose line was not split at the nearest integer point");
+            var corner=new Level();Box(corner,0,0,10,10);
+            Check(corner.CutPolygonsWithLine(P(-10,-9),P(10,11),out handled,out reason,true),reason);Validate(corner);
+            Check(corner.Polygons.All(p=>p.VertexCount>=3),"Automatic corner snap created a degenerate polygon");
+            var unsafePath=new Level();unsafePath.NewLine(unsafePath.NewPoint(0,0),unsafePath.NewPoint(1,100));
+            unsafePath.NewLine(unsafePath.NewPoint(-50,75),unsafePath.NewPoint(-20,75));string before=CanonicalSnapshot(unsafePath);
+            Check(unsafePath.CutPolygonsWithLine(P(-100,50),P(100,50),out handled,out reason,true),reason);Validate(unsafePath);
+            Check(unsafePath.Endpoints.Contains(P(1,50)),"Sparse loose edge intersection jumped to an endpoint");
+        });
+        Test("Precise diagonal cuts round intersections without lattice detours", () => {
+            var level=new Level();Check(level.CreateCirclePolygon(new[]{P(0,0),P(1000,0),P(1100,1000),P(0,1000)}.ToList(),out string reason),reason);
+            var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
+            editor.ButtonPress(-500,333,EditorModifiers.None);editor.ButtonRelease(2500,779,EditorModifiers.None);
+            Check(editor.LineToolError==null && level.Polygons.Count==2 && level.Endpoints.Contains(P(1056,564)),"Default diagonal precision failed: "+editor.LineToolError);Validate(level);
+            string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Rounded diagonal undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Rounded diagonal redo failed");
+            var dense=new Level();Box(dense,0,0,1000,1000);
+            Check(dense.CutPolygonsWithLine(P(-500,0),P(1500,777),out bool handled,out reason,true),reason);Validate(dense);
+            Check(dense.Endpoints.Contains(P(0,194)) && dense.Endpoints.Contains(P(1000,583)),"Precise small fractional correction failed");
+        });
+        Test("Sparse sloping shared edges retain textures topology and history", () => {
+            foreach(int shift in new[]{0,-2000}) foreach(bool reverse in new[]{false,true}) {
+                var level=new Level();
+                Check(level.CreateCirclePolygon(new[]{P(shift,shift),P(shift+1000,shift),P(shift+1001,shift+1000),P(shift,shift+1000)}.ToList(),out string reason),reason);
+                Check(level.CreateCirclePolygon(new[]{P(shift+1000,shift),P(shift+2000,shift),P(shift+2000,shift+1000),P(shift+1001,shift+1000)}.ToList(),out reason),reason);
+                level.Pave();foreach(var side in level.Sides)side.Primary.Texture=(ShapeDescriptor)123;
+                var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;
+                string before=CanonicalSnapshot(level);Point a=P(shift-500,shift+333),b=P(shift+2500,shift+779);
+                editor.ButtonPress(reverse?b.X:a.X,reverse?b.Y:a.Y,EditorModifiers.None);
+                editor.ButtonRelease(reverse?a.X:b.X,reverse?a.Y:b.Y,EditorModifiers.None);
+                Check(editor.LineToolError==null,"Sparse diagonal failed: "+editor.LineToolError);Validate(level);
+                Check(level.Polygons.Count==4 && level.Endpoints.Count(p=>p.Equals(P(shift+1001,shift+556)))==1,"Sparse crossing detoured or duplicated");
+                Check(level.Sides.Count>0 && level.Sides.All(side=>side.Primary.Texture.Equals((ShapeDescriptor)123)),"Rounded walls lost textures");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Sparse diagonal undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Sparse diagonal redo failed");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(CanonicalSnapshot(loaded)==after,"Sparse diagonal serialization changed geometry");
+            }
+        });
+        Test("Line shares selection hover and snap targeting during preview and commit", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.DefaultSnapDistance=8;
+            foreach(Point point in new[]{P(3,3),P(997,500),P(500,500)}) {
+                editor.Tool=Tool.Select;editor.UpdateHover(point.X,point.Y);
+                short vertex=editor.Hover.Point,line=editor.Hover.Line,polygon=editor.Hover.Polygon;
+                editor.Tool=Tool.Line;editor.UpdateHover(point.X,point.Y);
+                Check(editor.Hover.Point==vertex && editor.Hover.Line==line && editor.Hover.Polygon==polygon,"Line hover differs from selection");
+            }
+            editor.StartLine(3,3);Check(level.Endpoints[level.TemporaryLineStartIndex].Equals(P(0,0)),"Line start missed hovered vertex");
+            editor.UpdateLine(997,500,false,false);Check(level.TemporaryLineEnd.Equals(P(1000,500)) && editor.Hover.Line!=-1,"Preview missed hovered edge");
+            editor.ConnectLine(997,500,false,false);Check(editor.LineToolError==null && level.Polygons.Count==2,"Snapped cut failed: "+editor.LineToolError);Validate(level);
+            foreach(bool reverse in new[]{false,true}) {
+                var sparse=new Level();Check(sparse.CreateCirclePolygon(new[]{P(0,0),P(1000,0),P(1001,1000),P(0,1000)}.ToList(),out string reason),reason);
+                sparse.Pave();foreach(var side in sparse.Sides)side.Primary.Texture=(ShapeDescriptor)123;
+                var e=Editor(sparse);e.Tool=Tool.Line;string before=CanonicalSnapshot(sparse);
+                Point a=P(-3,300),b=P(1003,700);
+                e.ButtonPress(reverse?b.X:a.X,reverse?b.Y:a.Y,EditorModifiers.None);
+                e.Motion(reverse?a.X:b.X,reverse?a.Y:b.Y,EditorModifiers.None);
+                Point preview=sparse.TemporaryLineEnd;Check(preview.Equals(reverse?P(0,300):P(1001,700)),"Sparse edge did not project precisely");
+                e.ButtonRelease(reverse?a.X:b.X,reverse?a.Y:b.Y,EditorModifiers.None);
+                Check(e.LineToolError==null && sparse.Polygons.Count==2,"Sparse edge attachment failed: "+e.LineToolError);Validate(sparse);
+                Check(sparse.Endpoints.Contains(preview) && sparse.Sides.All(side=>side.Primary.Texture.Equals((ShapeDescriptor)123)),"Committed endpoint or wall texture differs from preview");
+                string after=CanonicalSnapshot(sparse);e.Undo();Check(CanonicalSnapshot(sparse)==before,"Snapped attachment undo failed");e.Redo();Check(CanonicalSnapshot(sparse)==after,"Snapped attachment redo failed");
+                var loaded=new Level();loaded.Load(sparse.Save().Clone());Validate(loaded);
+            }
+        });
+        Test("Dense group movement preserves shared geometry contents and one undo step", () => {
+            foreach(Tool tool in new[]{Tool.Move,Tool.Select}) {
+                Check(CircleTessellation.TryBuild(P(0,0),P(7680,7680),4,512,out var tiles,out string reason),reason);
+                var empty=new Level();Check(empty.PlanCircleTessellation(tiles,out var level,out _,out _,out reason),reason);
+                level.NewObject(P(256,256),0);level.Annotations.Add(new Annotation{X=256,Y=256,PolygonIndex=0,Text="move"});
+                var editor=Editor(level);editor.Tool=tool;editor.Selection.Polygons.UnionWith(Enumerable.Range(0,256).Select(i=>(short)i));
+                var original=level.Endpoints.ToArray();string before=CanonicalSnapshot(level);
+                editor.ButtonPress(300,300,EditorModifiers.None);
+                for(int i=0;i<100;i++)editor.Motion((short)(300+i%40),(short)(300+i%30),EditorModifiers.None);
+                editor.ButtonRelease(444,544,EditorModifiers.None);Validate(level);
+                Check(level.Endpoints.Select((p,i)=>p.Equals(P(original[i].X+144,original[i].Y+244))).All(v=>v),"Dense group endpoints drifted");
+                Check(level.Objects[0].X==400 && level.Objects[0].Y==500 && level.Annotations[0].X==400 && level.Annotations[0].Y==500,"Dense group contents left behind");
+                Check(editor.HistoryLabels.Count==2,"Dense move created extra undo steps");
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Dense move undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Dense move redo failed");Validate(level);
+            }
+        });
+        Test("Polygon Lua bindings round trip preserve other Lua and support undo", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);
+            var user=new EmbeddedLuaScript{Name="User script",Flags=2,Text="function custom_entry(player, polygon) end"};
+            byte[] userBytes=user.Source.ToArray();level.Chunks[EmbeddedLua.Tag]=EmbeddedLua.Write(new[]{user});
+            var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});string before=CanonicalSnapshot(level);
+            Check(editor.SetSelectedPolygonLua("custom_entry(player, polygon) -- ö\n",true,true,out string reason),reason);
+            Check(level.Polygons.All(p=>p.LuaTriggerEnabled && p.LuaTriggerOnce && p.LuaTriggerCode.Contains("ö")),"Trigger properties missing");
+            var scripts=EmbeddedLua.Read(level.Save().Chunks[EmbeddedLua.Tag]);Check(scripts.Count==2 && scripts[0].Flags==2 && scripts[0].Source.SequenceEqual(userBytes) && PolygonLua.IsGenerated(scripts[1]),"Other Lua lost or generated dispatcher missing");
+            Check(scripts[1].Text.Contains("actions[0]") && scripts[1].Text.Contains("actions[1]"),"Generated polygon indexes incorrect");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Polygons[1].LuaTriggerCode==level.Polygons[1].LuaTriggerCode,"Trigger metadata lost on save/load");
+            string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Trigger undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Trigger redo failed");
+            Check(editor.SetSelectedPolygonLua(level.Polygons[0].LuaTriggerCode,false,true,out reason),reason);
+            Check(!EmbeddedLua.Read(level.Save().Chunks[EmbeddedLua.Tag]).Any(PolygonLua.IsGenerated) && level.Polygons.All(p=>!p.LuaTriggerEnabled && p.LuaTriggerCode.Contains("custom_entry")),"Disabling erased code or retained dispatcher");
+            Check(editor.SetSelectedPolygonLua("",false,false,out reason),reason);Check(!level.Save().Chunks.ContainsKey(PolygonLua.Tag) && EmbeddedLua.Read(level.Chunks[EmbeddedLua.Tag]).Count==1,"Removing triggers removed user script or retained metadata");
+        });
+        Test("Polygon Lua follows renumbering splitting clipboard and visual mode", () => {
+            var level=new Level();Box(level,0,0,1000,1000);Box(level,2000,0,3000,1000);
+            level.Polygons[1].LuaTriggerCode="player:print('entered')";level.Polygons[1].LuaTriggerEnabled=true;
+            level.DeletePolygon(0);Check(level.Polygons[0].LuaTriggerEnabled && PolygonLua.Generate(level).Contains("actions[0]"),"Polygon deletion broke binding");
+            Check(level.CutPolygonsWithLine(P(2000,500),P(3000,500),out bool handled,out string reason),reason);
+            Check(level.Polygons.Count==2 && level.Polygons.All(p=>p.LuaTriggerEnabled && p.LuaTriggerCode.Contains("entered")),"Split did not inherit trigger");
+            var editor=Editor(level);editor.Tool=Tool.Select;editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            Check(editor.CopySelection(out reason) && editor.PasteSelection(7000,5000,out reason),reason);Validate(level);
+            Check(level.Polygons.Count==4 && level.Polygons.All(p=>p.LuaTriggerEnabled),"Clipboard lost trigger properties");
+            var original=level.Save().Clone();var temporary=EmbeddedLua.ForVisualMode(original,"-- locator");
+            Check(EmbeddedLua.Read(temporary.Chunks[EmbeddedLua.Tag]).Count==2 && EmbeddedLua.Read(temporary.Chunks[EmbeddedLua.Tag]).Count(PolygonLua.IsGenerated)==1,"Visual mode lost gameplay trigger");
+            temporary.Chunks.Remove(PolygonLua.Tag);EmbeddedLua.RestoreAfterVisualMode(original,temporary);
+            var loaded=new Level();loaded.Load(temporary);Check(loaded.Polygons.All(p=>p.LuaTriggerEnabled),"Visual mode lost trigger metadata");
+            Check(EmbeddedLua.Read(loaded.Save().Chunks[EmbeddedLua.Tag]).Count(PolygonLua.IsGenerated)==1,"Visual return duplicated dispatcher");
+        });
+        Test("Polygon Lua rejects malformed metadata and invalid edits atomically", () => {
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Selection.Polygon=0;string before=CanonicalSnapshot(level);
+            Check(!editor.SetSelectedPolygonLua("",true,false,out string reason) && reason!=null && CanonicalSnapshot(level)==before && !editor.CanUndo,"Empty active trigger accepted");
+            Check(!editor.SetSelectedPolygonLua("bad\0code",true,false,out reason) && CanonicalSnapshot(level)==before,"Null code changed map");
+            level.Chunks[EmbeddedLua.Tag]=EmbeddedLua.Write(new[]{new EmbeddedLuaScript{Name=PolygonLua.ScriptName,Text="-- User script with reserved name"}});before=CanonicalSnapshot(level);
+            Check(!editor.SetSelectedPolygonLua("player:print('test')",true,false,out reason) && CanonicalSnapshot(level)==before,"Reserved-name collision overwrote script");
+            level.Chunks.Remove(EmbeddedLua.Tag);level.Polygons[0].LuaTriggerCode="test()";level.Polygons[0].LuaTriggerEnabled=true;var wad=level.Save().Clone();
+            byte[] metadata=wad.Chunks[PolygonLua.Tag];
+            foreach(byte[] invalid in new[]{metadata.Take(metadata.Length-1).ToArray(),new byte[]{0,2,0,0},metadata.Concat(new byte[]{0}).ToArray()}) {
+                wad.Chunks[PolygonLua.Tag]=invalid;bool rejected=false;try { new Level().Load(wad.Clone()); }catch(System.IO.InvalidDataException) { rejected=true; }Check(rejected,"Bad trigger metadata accepted");
+            }
+        });
+        Test("Polygon Lua action catalog parameters quoting and preload generation", () => {
+            Check(PolygonLuaActions.Catalog.Select(a=>a.Id).Distinct().Count()==PolygonLuaActions.Catalog.Length,"Duplicate action IDs");
+            foreach(var action in PolygonLuaActions.Catalog) {
+                string code=PolygonLuaActions.Generate(action.Id);PolygonLua.Validate(code);
+                Check(code.StartsWith("\n-- ") && code.EndsWith("end\n") && !string.IsNullOrWhiteSpace(action.Category),"Action cannot be composed: "+action.Id);
+            }
+            Check(PolygonLuaActions.Generate("message",text:"Quotes: \" \\ newline\nö").Contains("\\010"),"Message control characters not escaped");
+            bool rejected=false;try { PolygonLuaActions.Generate("ammo_item",new System.Collections.Generic.Dictionary<string,double>{{"item",10}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Non-ammo item accepted");
+            rejected=false;try { PolygonLuaActions.Generate("slow_heal",new System.Collections.Generic.Dictionary<string,double>{{"rate",double.NaN}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Invalid heal rate accepted");
+            var level=new Level();Box(level,0,0,1000,1000);
+            level.Polygons[0].LuaTriggerEnabled=true;level.Polygons[0].LuaTriggerCode=PolygonLuaActions.Generate("spawn",new System.Collections.Generic.Dictionary<string,double>{{"collection",9}})+PolygonLuaActions.Generate("spawn",new System.Collections.Generic.Dictionary<string,double>{{"collection",9}});
+            string generated=PolygonLua.Generate(level);Check(generated.Split(new[]{"table.insert(CollectionsUsed, 9)"},StringSplitOptions.None).Length==2,"Monster preload missing or duplicated");
+            Check(generated.IndexOf("table.insert(CollectionsUsed")<generated.IndexOf("actions[0]"),"Monster collection loaded inside action instead of startup");
+            level.Polygons[0].LuaTriggerEnabled=false;Check(!PolygonLua.Generate(level).Contains("table.insert(CollectionsUsed"),"Disabled spawn still preloads collection");
+        });
+        Test("Spawn presets upgrade without changing custom scripts and persist repaired coordinates", () => {
+            string legacy = @"-- Spawn monsters
+do
+-- Forge Ahead preload collection:9
+local target = Polygons[0]
+if target and MonsterTypes[8] then
+  for i = 1, 2 do
+    local monster = Monsters.new(target.x, target.y, 0, target, 8)
+    if monster then monster.active = true else player:print('Unable to spawn monster'); break end
+  end
+else player:print('Spawn polygon or monster type does not exist') end
+end
+";
+            var parameters = new System.Collections.Generic.Dictionary<string,double>{{"collection",9},{"polygon",0},{"monster",8},{"count",2}};
+            string expected = PolygonLuaActions.Generate("spawn",parameters).TrimStart('\n');
+            Check(PolygonLuaActions.UpgradeSpawnPresets(legacy)==expected,"Legacy preset not repaired");
+            Check(PolygonLuaActions.UpgradeSpawnPresets(legacy.Replace("target.y, 0", "target.y, target.floor.height"))==expected,"Old absolute height preset not repaired");
+            Check(PolygonLuaActions.UpgradeSpawnPresets(expected)==expected,"Upgrade not idempotent");
+            string custom=legacy.Replace("target.x, target.y", "target.x + 1, target.y");
+            Check(PolygonLuaActions.UpgradeSpawnPresets(custom)==custom,"Custom spawn coordinates overwritten");
+            Check(PolygonLuaActions.UpgradeSpawnPresets(legacy+legacy)==expected+expected,"Multiple actions not upgraded");
+            var level = new Level();Box(level,3000,4000,4000,5000);
+            level.Polygons[0].LuaTriggerEnabled=true;level.Polygons[0].LuaTriggerCode=legacy;
+            var restored=new Level();restored.Load(level.Save().Clone());
+            Check(restored.Polygons[0].LuaTriggerCode==expected,"Repaired source not saved");
+            Check(EmbeddedLua.Read(restored.Chunks[EmbeddedLua.Tag]).Single(PolygonLua.IsGenerated).Text.Contains("Monsters.new(x, y, 0, target, 8)"),"Runtime source not repaired");
+        });
+        Test("Fog action parameters and automatic scenario monster graphics preloading", () => {
+            var values=new System.Collections.Generic.Dictionary<string,double>{{"underwater",1},{"red",0.25},{"green",0.75},{"blue",1},{"depth",12.5},{"landscapes",1}};
+            string fog=PolygonLuaActions.Generate("fog_set",values);
+            Check(fog.Contains("Level.underwater_fog") && fog.Contains("fog.color.r = 0.25") && fog.Contains("fog.depth = 12.5") && fog.Contains("fog.active = true"),"Fog parameters lost");
+            Check(!PolygonLuaActions.Generate("fog_color",values).Contains("fog.active"),"Color unexpectedly enables fog");
+            Check(PolygonLuaActions.Generate("fog_off").Contains("fog.active = false"),"Fog disable missing");
+            values["depth"]=0;bool rejected=false;try { PolygonLuaActions.Generate("fog_depth",values); }catch(ArgumentException) { rejected=true; }Check(rejected,"Zero fog depth accepted");
+            var level=new Level();Box(level,0,0,1000,1000);var p=level.Polygons[0];
+            p.LuaTriggerEnabled=true;p.LuaTriggerCode=PolygonLuaActions.Generate("spawn");
+            string script=PolygonLua.Generate(level);
+            Check(script.Contains("table.insert(CollectionsUsed, 9)") && script.IndexOf("table.insert(CollectionsUsed, 9)")<script.IndexOf("local actions"),"Automatic collection preload missing or too late");
+            p.LuaTriggerCode+=p.LuaTriggerCode;Check(PolygonLua.Generate(level).Split(new[]{"table.insert(CollectionsUsed, 9)"},StringSplitOptions.None).Length==2,"Repeated spawn types not deduplicated");
+            var restored=new Level();restored.Load(level.Save().Clone());Check(PolygonLua.Generate(restored).Contains("table.insert(CollectionsUsed, 9)"),"Preload lost on save");
+            byte[] physics=new byte[47*156];physics[8*156+1]=(byte)(23 | (2<<5));level.Chunks[Wadfile.Chunk("MNpx")]=physics;
+            Check(PolygonLua.SpawnCollection(level,8)==23 && PolygonLua.Generate(level).Contains("table.insert(CollectionsUsed, 23)"),"Embedded physics collection/CLUT not decoded");
+            level.Chunks[Wadfile.Chunk("MNpx")]=new byte[10];Check(PolygonLua.SpawnCollection(level,8)==9,"Truncated physics not handled");
+            Check(PolygonLua.SpawnCollection(level,47)==-1 && PolygonLua.SpawnCollection(level,-1)==-1,"Invalid monster accepted");
+            p.LuaTriggerEnabled=false;Check(!PolygonLua.Generate(level).Contains("table.insert(CollectionsUsed"),"Disabled action preloads graphics");
+        });
+        Test("Named Lua choices retain IDs and fog transitions validate duration", () => {
+            Check(PolygonLuaActions.NamedChoices("monster").Single(n=>n.Key==8).Value.Contains("Fighter"),"Monster ID mismatch");
+            Check(PolygonLuaActions.NamedChoices("sound").Single(n=>n.Key==1).Value=="teleport in","Sound ID mismatch");
+            foreach(string name in new[]{"monster","sound","item","collection"}) {
+                var choices=PolygonLuaActions.NamedChoices(name).ToList();Check(choices.Count>0 && choices.Select(c=>c.Key).Distinct().Count()==choices.Count,"Invalid named choices: "+name);
+            }
+            bool rejected=false;try { PolygonLuaActions.Generate("fog_fade",new System.Collections.Generic.Dictionary<string,double>{{"seconds",0}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Zero transition duration accepted");
+            Check(PolygonLuaActions.Generate("fog_fade",new System.Collections.Generic.Dictionary<string,double>{{"seconds",1.5}}).Contains("1.5 * 30"),"Duration not invariant");
+        });
+        Test("Spawner actions preload graphics and validate limits", () => {
+            var level=new Level();Box(level,0,0,1000,1000);
+            level.Polygons[0].LuaTriggerEnabled=true;level.Polygons[0].LuaTriggerCode=PolygonLuaActions.Generate("spawner");
+            Check(PolygonLua.Generate(level).Contains("table.insert(CollectionsUsed, 9)"),"Spawner graphics not preloaded");
+            Check(PolygonLuaActions.Generate("spawner",new System.Collections.Generic.Dictionary<string,double>{{"indefinite",1}}).Contains("remaining=-1"),"Indefinite limit missing");
+            bool rejected=false;try { PolygonLuaActions.Generate("spawner",new System.Collections.Generic.Dictionary<string,double>{{"interval",0}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Zero spawn interval accepted");
+            var restored=new Level();restored.Load(level.Save().Clone());Check(restored.Polygons[0].LuaTriggerCode==level.Polygons[0].LuaTriggerCode,"Spawner not retained");
         });
         Console.WriteLine(passed + " test groups passed.");
     }

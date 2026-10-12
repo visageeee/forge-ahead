@@ -7,6 +7,16 @@ namespace Weland
     {
         public Selection Hover { get; } = new Selection();
 
+        Selection PickGeometry(short X,short Y)
+        {
+            var hit=new Selection();Point p=new Point(X,Y);
+            hit.Point=ClosestPoint(p);if(hit.Point!=-1)return hit;
+            hit.Line=ClosestLine(p);if(hit.Line!=-1)return hit;
+            short polygon=Level.GetEnclosingPolygon(p);
+            if(polygon!=-1 && Level.Filter(Level.Polygons[polygon]))hit.Polygon=polygon;
+            return hit;
+        }
+
         Selection PickSelection(short X, short Y)
         {
             var hit = new Selection();
@@ -17,16 +27,17 @@ namespace Weland
             if (hit.Object != -1) return hit;
             hit.Annotation = ClosestAnnotation(p);
             if (hit.Annotation != -1) return hit;
-            hit.Line = ClosestLine(p);
-            if (hit.Line != -1) return hit;
-            short polygon = Level.GetEnclosingPolygon(p);
-            if (polygon != -1 && Level.Filter(Level.Polygons[polygon])) hit.Polygon = polygon;
-            return hit;
+            return PickGeometry(X,Y);
         }
 
         public bool UpdateHover(short X, short Y)
         {
-            var hit = Tool == Tool.Select ? PickSelection(X, Y) : new Selection();
+            var hit = Tool == Tool.Select ? PickSelection(X, Y) : Tool == Tool.Line ? PickGeometry(X,Y) : new Selection();
+            return SetHover(hit);
+        }
+
+        bool SetHover(Selection hit)
+        {
             if (Hover.Point == hit.Point && Hover.Line == hit.Line && Hover.Polygon == hit.Polygon &&
                 Hover.Object == hit.Object && Hover.Annotation == hit.Annotation) return false;
             Hover.CopyFrom(hit);
@@ -157,7 +168,7 @@ namespace Weland
 
         void FinishSelection(short X, short Y)
         {
-            if (pendingSelectionBox) UpdateSelection(X, Y);
+            UpdateSelection(X, Y);
             pendingSelectionBox = DrawingSelectionBox = false;
             beforeSelectionBox = null;
             Dirty = RedrawAll = true;
@@ -205,7 +216,7 @@ namespace Weland
                 dx = Math.Max(short.MinValue - note.X, Math.Min(short.MaxValue - note.X, dx));
                 dy = Math.Max(short.MinValue - note.Y, Math.Min(short.MaxValue - note.Y, dy));
             }
-            foreach (short index in points) TranslatePoint(index, dx, dy);
+            TranslatePoints(points,dx,dy);
             foreach (MapObject obj in objects) TranslateObject(obj, dx, dy);
             foreach (Annotation note in notes) TranslateAnnotation(note, dx, dy);
             if (dx != 0 || dy != 0) Changed = true;

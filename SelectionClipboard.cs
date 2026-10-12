@@ -115,6 +115,7 @@ namespace Weland
             foreach (var pair in polygons)
             {
                 var polygon = trial.Polygons[pair.Value]; var source = clipboard.Polygons[pair.Key];
+                polygon.LuaTriggerCode=source.LuaTriggerCode;polygon.LuaTriggerEnabled=source.LuaTriggerEnabled;polygon.LuaTriggerOnce=source.LuaTriggerOnce;
                 if (polygon.Type == PolygonType.Platform)
                 {
                     if (source.Permutation < 0 || source.Permutation >= clipboard.Platforms.Count)

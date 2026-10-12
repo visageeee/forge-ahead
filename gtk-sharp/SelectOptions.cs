@@ -46,6 +46,8 @@ namespace Weland
             };
             contents.PackStart(apply, false, false, 0);
             contents.PackStart(new Label("Positive raises; negative lowers.\nUses selected polygons, or polygons\ntouching selected vertices/lines.") { Xalign = 0, LineWrap = true, MaxWidthChars = 28 }, false, false, 0);
+            var lua=new Button("Polygon Lua trigger…");lua.Clicked+=OnPolygonLua;
+            contents.PackStart(lua,false,false,0);
             contents.PackStart(message, false, false, 0);
             selectOptions.Add(contents); contents.ShowAll(); sidebar.PackStart(selectOptions, false, false, 0);
         }

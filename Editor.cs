@@ -270,6 +270,7 @@ namespace Weland
 
         public void LoadSettings()
         {
+            LineSplitAll = Weland.Settings.GetSetting("Tools/LineSplitAll", false);
             BoxFilled = Weland.Settings.GetSetting("Tools/BoxFilled", true);
             CircleFilled = Weland.Settings.GetSetting("Tools/CircleFilled", true);
             RingInnerCount = Weland.Settings.GetSetting("Tools/RingInnerCount", 1);
@@ -289,6 +290,7 @@ namespace Weland
             RingInnerPercent = Weland.Settings.GetSetting("Tools/RingInnerPercent", 50);
             CircleSides = Weland.Settings.GetSetting("Tools/CircleSides", 8);
             CircleTessellationEnabled = Weland.Settings.GetSetting("Tools/CircleTessellation", false);
+            CirclePattern = (TessellationPattern)Weland.Settings.GetSetting("Tools/CirclePattern",0);
             CircleTileSize = Weland.Settings.GetSetting("Tools/CircleTileSize", 1024);
             DefaultSnapDistance = Weland.Settings.GetSetting("Distance/Select/Default", 4);
             ObjectSnapDistance = Weland.Settings.GetSetting("Distance/Select/Object", 8);
@@ -318,6 +320,7 @@ namespace Weland
             Weland.Settings.PutSetting("Tools/RingInnerPercent", RingInnerPercent);
             Weland.Settings.PutSetting("Tools/CircleTessellation", CircleTessellationEnabled);
             Weland.Settings.PutSetting("Tools/CircleTileSize", CircleTileSize);
+            Weland.Settings.PutSetting("Tools/CirclePattern", (int)CirclePattern);
             Weland.Settings.PutSetting("Distance/Select/Default", DefaultSnapDistance);
             Weland.Settings.PutSetting("Distance/Select/Object", ObjectSnapDistance);
             Weland.Settings.PutSetting("Distance/Inertia/Default", InertiaDistance);
@@ -469,19 +472,56 @@ namespace Weland
         Wadfile.DirectoryEntry lineBefore;
         Selection lineSelectionBefore;
         bool lineChangedBefore;
+        bool lineSplitAll;
+        short lineStartEdge = -1;
+
+        Point ResolveLinePoint(Point p, bool useGrid, out Selection target)
+        {
+            target = PickGeometry(p.X,p.Y);
+            if (target.Point != -1) return Level.Endpoints[target.Point];
+            if (target.Line != -1 && TrySnapLinePoint(p,Level.Lines[target.Line],out Point attached)) return attached;
+            if (useGrid) {
+                p=GridAdjust(p); target=PickGeometry(p.X,p.Y);
+                if (target.Point != -1) return Level.Endpoints[target.Point];
+                if (target.Line != -1 && TrySnapLinePoint(p,Level.Lines[target.Line],out attached)) return attached;
+            }
+            return p;
+        }
+        public bool LineSplitAll
+        {
+            get => lineSplitAll;
+            set
+            {
+                if (lineSplitAll == value) return;
+                if (Level != null && Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
+                lineSplitAll = value; LineToolError = null; Dirty = RedrawAll = true;
+            }
+        }
         public string LineToolError { get; private set; }
+        public void CancelLine() { if (lineBefore != null) AbortLine(); }
         void AbortLine() {
             if (lineBefore != null) { Level.Load(lineBefore.Clone()); Selection.CopyFrom(lineSelectionBefore); Changed = lineChangedBefore; }
-            Level.TemporaryLineStartIndex = -1; lineBefore = null; CancelPendingUndo(); RedrawAll = true;
+            Level.TemporaryLineStartIndex = -1; lineBefore = null; lineStartEdge=-1; ClearHover(); CancelPendingUndo(); RedrawAll = true;
         }
-        Point SnapLinePoint(Point point, Line line) {
-            Point a = Level.Endpoints[line.EndpointIndexes[0]], b = Level.Endpoints[line.EndpointIndexes[1]];
-            int dx = b.X-a.X, dy = b.Y-a.Y, x = Math.Abs(dx), y = Math.Abs(dy);
-            while (y != 0) { int remainder = x % y; x = y; y = remainder; }
-            if (x == 0) return a;
-            double t = ((double)(point.X-a.X)*dx+(double)(point.Y-a.Y)*dy)/((double)dx*dx+(double)dy*dy);
-            int step = (int)Math.Round(Math.Max(0,Math.Min(1,t))*x);
-            return new Point((short)(a.X+step*(dx/x)),(short)(a.Y+step*(dy/x)));
+        bool TrySnapLinePoint(Point point, Line line, out Point snapped)
+        {
+            Point a=Level.Endpoints[line.EndpointIndexes[0]], b=Level.Endpoints[line.EndpointIndexes[1]];
+            int dx=b.X-a.X,dy=b.Y-a.Y;
+            snapped=point;if(dx==0 && dy==0)return false;
+            double t=Math.Max(0,Math.Min(1,((double)(point.X-a.X)*dx+(double)(point.Y-a.Y)*dy)/((double)dx*dx+(double)dy*dy)));
+            snapped=new Point((short)Math.Floor(a.X+t*dx+0.5),(short)Math.Floor(a.Y+t*dy+0.5));
+            return true;
+        }
+        bool AttachLineEndpoint(Point point, short edge, out short vertex)
+        {
+            int existing=Level.Endpoints.IndexOf(point);
+            vertex=existing==-1 ? (short)-1 : (short)existing;
+            if(edge==-1 || Array.IndexOf(Level.Lines[edge].EndpointIndexes,vertex)!=-1)return true;
+            var boundary=Level.Lines[edge];Point a=Level.Endpoints[boundary.EndpointIndexes[0]],b=Level.Endpoints[boundary.EndpointIndexes[1]];
+            if(((long)point.X-a.X)*(b.Y-a.Y)-((long)point.Y-a.Y)*(b.X-a.X)==0)return true;
+            if(!CanSplitLine(edge)) { LineToolError="This attachment exceeds the eight-vertex limit.";return false; }
+            vertex=Level.SplitLine(edge,point.X,point.Y,vertex);
+            return true;
         }
         bool CanSplitLine(short index)
         {
@@ -506,43 +546,15 @@ namespace Weland
 
         public void StartLine(short X, short Y)
         {
-            SetUndo();
+            SetUndo(LineSplitAll ? "Split intersected polygons" : null);
             lineBefore = Level.Save().Clone(); lineSelectionBefore = new Selection(); lineSelectionBefore.CopyFrom(Selection);
             lineChangedBefore = Changed; LineToolError = null;
             Selection.Clear();
-            Point p = new Point(X, Y);
-            short index = ClosestPoint(p);
-            if (index == -1)
-            {
-                p = GridAdjust(new Point(X, Y));    //custom grid code
-                                                    //p = new Point(GridAdjust(X), GridAdjust(Y));	old code
-                index = ClosestPoint(p);
-            }
-
-            if (index != -1)
-            {
-                Level.TemporaryLineStartIndex = index;
-                Level.TemporaryLineEnd = p;
-            }
-            else
-            {
-                index = Level.GetClosestLine(p);
-                if (index != -1 && Level.Distance(p, Level.Lines[index]) < DefaultSnap())
-                {
-                    //split
-                    Point onLine = SnapLinePoint(p, Level.Lines[index]);
-                    // Defer attachment until the cut can be validated as a whole.
-                    short existing = Level.GetClosestPoint(onLine);
-                    Level.TemporaryLineStartIndex = existing != -1 && Level.Endpoints[existing].X == onLine.X && Level.Endpoints[existing].Y == onLine.Y ? existing : Level.NewPoint(onLine.X, onLine.Y);
-                    Level.TemporaryLineEnd = p;
-                }
-                else
-                {
-                    Level.TemporaryLineStartIndex = Level.NewPoint(p.X, p.Y);
-                    Level.TemporaryLineEnd = p;
-                }
-            }
-
+            Point p=ResolveLinePoint(new Point(X,Y),true,out Selection target);
+            lineStartEdge=target.Point==-1 ? target.Line : (short)-1;
+            Level.TemporaryLineStartIndex=target.Point!=-1 ? target.Point : Level.NewPoint(p.X,p.Y);
+            Level.TemporaryLineEnd=p;
+            Hover.CopyFrom(target);
             Changed = true;
         }
 
@@ -555,35 +567,12 @@ namespace Weland
 
             AddDirty(Level.Endpoints[Level.TemporaryLineStartIndex]);
             AddDirty(Level.TemporaryLineEnd);
-            Point p = new Point(X, Y);
-            short index = -1;
-            if (constrainAngle || constrainLength)
-            {
-                p = Constrain(p, constrainAngle, constrainLength);
-            }
-            else
-            {
-                index = ClosestPoint(p);
-                if (index == -1)
-                {
-                    p = GridAdjust(new Point(X, Y));    //custom grid code
-                                                        //p = new Point(GridAdjust(X), GridAdjust(Y));	old code
-                    index = ClosestPoint(p);
-                }
-            }
-
-            if (index != -1)
-            {
-                Level.TemporaryLineEnd.X = Level.Endpoints[index].X;
-                Level.TemporaryLineEnd.Y = Level.Endpoints[index].Y;
-            }
-            else
-            {
-                short edge = Level.GetClosestLine(p);
-                if (edge != -1 && Level.Distance(p,Level.Lines[edge]) < DefaultSnap()) p = SnapLinePoint(p,Level.Lines[edge]);
-                Level.TemporaryLineEnd.X = p.X;
-                Level.TemporaryLineEnd.Y = p.Y;
-            }
+            Point p=new Point(X,Y);
+            bool constrained=constrainAngle || constrainLength;
+            if(constrained)p=Constrain(p,constrainAngle,constrainLength);
+            p=ResolveLinePoint(p,!constrained,out Selection target);
+            if(SetHover(target))RedrawAll=true;
+            Level.TemporaryLineEnd=p;
             AddDirty(Level.TemporaryLineEnd);
 
             Changed = true;
@@ -594,20 +583,20 @@ namespace Weland
             if (Level.TemporaryLineStartIndex == -1) return;
             Point p = new Point(X,Y);
             if (constrainAngle || constrainLength) p = Constrain(p,constrainAngle,constrainLength);
-            short snapPoint = ClosestPoint(p);
-            if (snapPoint == -1 && !constrainAngle && !constrainLength) { p = GridAdjust(p); snapPoint = ClosestPoint(p); }
-            if (snapPoint != -1) p = Level.Endpoints[snapPoint];
-            else {
-                short snapLine = Level.GetClosestLine(p);
-                if (snapLine != -1 && Level.Distance(p,Level.Lines[snapLine]) < DefaultSnap()) p = SnapLinePoint(p,Level.Lines[snapLine]);
+            p=ResolveLinePoint(p,!constrainAngle && !constrainLength,out Selection target);
+            Point start=Level.Endpoints[Level.TemporaryLineStartIndex];
+            if(start.Equals(p)) { AbortLine();return; }
+            if(!AttachLineEndpoint(start,lineStartEdge,out short startVertex)) { AbortLine();return; }
+            // Splitting the start renumbers lines; resolve the end against the updated map.
+            short endEdge=ClosestLine(p);
+            if(endEdge!=-1 && TrySnapLinePoint(p,Level.Lines[endEdge],out Point onEnd) && onEnd.Equals(p)) {
+                if(!AttachLineEndpoint(p,endEdge,out short attachedEnd)) { AbortLine();return; }
             }
-            Point start = Level.Endpoints[Level.TemporaryLineStartIndex];
-            if (Level.Distance(start,p) < DefaultSnap()) { AbortLine(); return; }
-            if (!Level.CutPolygonsWithLine(start,p,out bool handled,out string reason)) {
+            if (!Level.CutPolygonsWithLine(start,p,out bool handled,out string reason,LineSplitAll)) {
                 LineToolError = reason; AbortLine(); return;
             }
             if (handled) {
-                Level.TemporaryLineStartIndex = -1; lineBefore = null;
+                Level.TemporaryLineStartIndex = -1; lineBefore = null; ClearHover();
                 Selection.Point = Level.GetClosestPoint(p); Changed = true; RedrawAll = true; return;
             }
             // Attach the deferred start even when drawing outside a polygon.
@@ -623,9 +612,8 @@ namespace Weland
             short endIndex = Level.GetClosestPoint(p);
             if (endIndex == -1 || Level.Endpoints[endIndex].X != p.X || Level.Endpoints[endIndex].Y != p.Y) {
                 short edge = Level.GetClosestLine(p);
-                if (edge != -1 && Level.Distance(p,Level.Lines[edge]) < DefaultSnap()) {
+                if (edge != -1 && Level.Distance(p,Level.Lines[edge]) < DefaultSnap() && TrySnapLinePoint(p,Level.Lines[edge],out Point onLine)) {
                     if (!CanSplitLine(edge)) { LineToolError="This attachment exceeds the eight-vertex limit."; AbortLine(); return; }
-                    Point onLine = SnapLinePoint(p,Level.Lines[edge]);
                     endIndex = Level.SplitLine(edge,onLine.X,onLine.Y);
                 } else endIndex = Level.NewPoint(p.X,p.Y);
             }
@@ -810,6 +798,18 @@ namespace Weland
                 polygons.UnionWith(Level.EndpointPolygons[pair.Key]);
             }
             foreach (Polygon polygon in polygons) Level.UpdatePolygonConcavity(polygon);
+        }
+
+        void TranslatePoints(IEnumerable<short> points,int dx,int dy)
+        {
+            // Group tools repaint the full frame; update the complete group
+            // before recalculating each affected polygon just once.
+            var polygons=new HashSet<Polygon>();
+            foreach(short index in points) {
+                Point p=Level.Endpoints[index];p.X=(short)(p.X+dx);p.Y=(short)(p.Y+dy);
+                Level.Endpoints[index]=p;polygons.UnionWith(Level.EndpointPolygons[index]);
+            }
+            foreach(var polygon in polygons)Level.UpdatePolygonConcavity(polygon);
         }
 
         void TranslateObject(MapObject obj, int X, int Y)
