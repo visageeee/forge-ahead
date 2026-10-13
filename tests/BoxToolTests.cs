@@ -102,7 +102,7 @@ class BoxToolTests
         }
         Test("line tool cuts edge to edge and vertex to vertex with undo", () => {
             foreach(bool diagonal in new[]{false,true}) {
-                var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;
+                var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;
                 string before=CanonicalSnapshot(level); editor.StartLine(0,diagonal?(short)0:(short)500);editor.ConnectLine(1000,diagonal?(short)1000:(short)500,false,false);editor.CommitHistory(true);
                 Check(level.Polygons.Count==2,"Line did not cut polygon: "+editor.LineToolError);Validate(level);
                 Check(level.Endpoints.Count==(diagonal?4:6),"Duplicate or missing edge vertices");
@@ -126,13 +126,13 @@ class BoxToolTests
             var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);Check(loaded.Polygons.Count==2,"Cut lost on save/load");
         });
         Test("failed and cancelled polygon line cuts restore map without a history step", () => {
-            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;string before=CanonicalSnapshot(level);
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
             editor.StartLine(0,500);editor.ConnectLine(500,500,false,false);
             Check(CanonicalSnapshot(level)==before && !editor.CanUndo && editor.LineToolError!=null,"Incomplete cut changed map or history");
             editor.StartLine(0,500);editor.ConnectLine(0,500,false,false);Check(CanonicalSnapshot(level)==before,"Cancelled line left edge vertices");
         });
         Test("line tool attaches outside polygons and reuses existing boundary segments", () => {
-            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;
+            var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;
             editor.StartLine(0,500);editor.ConnectLine(-500,500,false,false);editor.CommitHistory(true);
             Check(level.Polygons.Count==1 && level.Polygons[0].VertexCount==5 && level.Endpoints.Count==6,"Outside attachment failed");Validate(level);
             editor.StartLine(1000,250);editor.ConnectLine(1000,750,false,false);editor.CommitHistory(true);Validate(level);
@@ -142,10 +142,10 @@ class BoxToolTests
         });
         Test("line tool cuts an eight-sided polygon and cancels on tool change", () => {
             var level=new Level();Check(level.CreateCirclePolygon(new System.Collections.Generic.List<Point>{P(0,300),P(300,0),P(700,0),P(1000,300),P(1000,700),P(700,1000),P(300,1000),P(0,700)},out string reason),reason);
-            var editor=Editor(level);editor.Tool=Tool.Line;string before=CanonicalSnapshot(level);
+            var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;string before=CanonicalSnapshot(level);
             editor.StartLine(0,500);editor.Tool=Tool.Select;
             Check(CanonicalSnapshot(level)==before && !editor.CanUndo,"Tool change left unfinished line geometry");
-            editor.Tool=Tool.Line;editor.StartLine(0,500);editor.ConnectLine(1000,500,false,false);
+            editor.Tool=Tool.Line;editor.LineSplitAll=true;editor.StartLine(0,500);editor.ConnectLine(1000,500,false,false);
             Check(level.Polygons.Count==2,editor.LineToolError);Validate(level);
         });
         Test("terminal pictures decode indexed PICT PackBits and direct RGB rows", () => {
@@ -1209,7 +1209,7 @@ class BoxToolTests
             var level=new Level();var editor=Editor(level);editor.StartBox(0,0);editor.FinishBox(1000,1000);editor.CommitHistory();
             editor.Tool=Tool.Fill;editor.ButtonPress(500,500,EditorModifiers.None);editor.ButtonRelease(500,500,EditorModifiers.None);
             Check(editor.HistoryLabels.Count==2,"Failed fill added action");
-            editor.Tool=Tool.Line;editor.ButtonPress(2000,2000,EditorModifiers.None);editor.Undo();
+            editor.Tool=Tool.Line;editor.LineSplitAll=true;editor.ButtonPress(2000,2000,EditorModifiers.None);editor.Undo();
             Check(level.Polygons.Count==0 && level.Endpoints.Count==0 && editor.HistoryLabels.Count==2,"Canceled temporary line was recorded");
         });
         Test("Rotate keeps polygon center carries contents and records one undo step", () => {
@@ -1922,7 +1922,7 @@ class BoxToolTests
             Check(level.Polygons.Count==2 && !editor.DrawingSelectionBox && editor.Selection.Polygons.Contains(1),"Placement leaked into selection gesture");
             string before=CanonicalSnapshot(level);Check(editor.BeginPaste(out reason),reason);editor.ButtonPress(7000,7000,EditorModifiers.RightClick);editor.ButtonRelease(7000,7000,EditorModifiers.RightClick);
             Check(!editor.Pasting && CanonicalSnapshot(level)==before,"Right click changed map instead of cancelling");
-            Check(editor.BeginPaste(out reason),reason);editor.Tool=Tool.Line;Check(!editor.Pasting,"Tool switch retained paste preview");
+            Check(editor.BeginPaste(out reason),reason);editor.Tool=Tool.Line;editor.LineSplitAll=true;Check(!editor.Pasting,"Tool switch retained paste preview");
         });
         Test("Clipboard remaps platforms teleports switches and preserves settings", () => {
             var level=new Level();Box(level,0,0,1000,1000);Box(level,1000,0,2000,1000);level.Pave();
@@ -1979,7 +1979,7 @@ class BoxToolTests
             editor.StartLine(-500,500);editor.UpdateLine(1500,500,false,false);editor.LineSplitAll=false;
             Check(level.TemporaryLineStartIndex==-1 && CanonicalSnapshot(level)==before && !editor.CanUndo,"Changing option left a partial cut");
             editor.ButtonPress(-500,500,EditorModifiers.None);editor.ButtonRelease(1500,500,EditorModifiers.None);
-            Check(editor.LineToolError!=null && CanonicalSnapshot(level)==before,"Disabled option allowed outside endpoints");
+            Check(editor.LineToolError==null && level.Polygons.Count==1,"Disabled option rejected ordinary crossing line");
         });
         Test("Split-all line reuses collinear boundaries and splits paths without polygons", () => {
             var level=new Level();Box(level,0,0,1000,1000);
@@ -2076,7 +2076,7 @@ class BoxToolTests
             foreach(Point point in new[]{P(3,3),P(997,500),P(500,500)}) {
                 editor.Tool=Tool.Select;editor.UpdateHover(point.X,point.Y);
                 short vertex=editor.Hover.Point,line=editor.Hover.Line,polygon=editor.Hover.Polygon;
-                editor.Tool=Tool.Line;editor.UpdateHover(point.X,point.Y);
+                editor.Tool=Tool.Line;editor.LineSplitAll=true;editor.UpdateHover(point.X,point.Y);
                 Check(editor.Hover.Point==vertex && editor.Hover.Line==line && editor.Hover.Polygon==polygon,"Line hover differs from selection");
             }
             editor.StartLine(3,3);Check(level.Endpoints[level.TemporaryLineStartIndex].Equals(P(0,0)),"Line start missed hovered vertex");
@@ -2085,7 +2085,7 @@ class BoxToolTests
             foreach(bool reverse in new[]{false,true}) {
                 var sparse=new Level();Check(sparse.CreateCirclePolygon(new[]{P(0,0),P(1000,0),P(1001,1000),P(0,1000)}.ToList(),out string reason),reason);
                 sparse.Pave();foreach(var side in sparse.Sides)side.Primary.Texture=(ShapeDescriptor)123;
-                var e=Editor(sparse);e.Tool=Tool.Line;string before=CanonicalSnapshot(sparse);
+                var e=Editor(sparse);e.Tool=Tool.Line;e.LineSplitAll=true;string before=CanonicalSnapshot(sparse);
                 Point a=P(-3,300),b=P(1003,700);
                 e.ButtonPress(reverse?b.X:a.X,reverse?b.Y:a.Y,EditorModifiers.None);
                 e.Motion(reverse?a.X:b.X,reverse?a.Y:b.Y,EditorModifiers.None);
@@ -2154,6 +2154,19 @@ class BoxToolTests
             foreach(byte[] invalid in new[]{metadata.Take(metadata.Length-1).ToArray(),new byte[]{0,2,0,0},metadata.Concat(new byte[]{0}).ToArray()}) {
                 wad.Chunks[PolygonLua.Tag]=invalid;bool rejected=false;try { new Level().Load(wad.Clone()); }catch(System.IO.InvalidDataException) { rejected=true; }Check(rejected,"Bad trigger metadata accepted");
             }
+        });
+        Test("Visual mode restores scripted light definitions and keeps added lights", () => {
+            var original=new Wadfile.DirectoryEntry();
+            original.Chunks[EmbeddedLua.Tag]=EmbeddedLua.Write(new[]{new EmbeddedLuaScript{Name="Test",Text="-- script"}});
+            original.Chunks[Light.Tag]=new byte[]{1,2,3};
+            var returned=new Wadfile.DirectoryEntry();returned.Chunks[Light.Tag]=new byte[]{9,9,9,4,5};
+            EmbeddedLua.RestoreAfterVisualMode(original,returned);
+            Check(returned.Chunks[Light.Tag].SequenceEqual(new byte[]{1,2,3,4,5}),"Runtime changes leaked or appended lights lost");
+            returned.Chunks[Light.Tag][0]=7;Check(original.Chunks[Light.Tag][0]==1,"Original lights aliased");
+            original.Chunks.Remove(EmbeddedLua.Tag);EmbeddedLua.RestoreAfterVisualMode(original,returned);
+            Check(returned.Chunks[Light.Tag][0]==7,"Unscripted light edit lost");
+            string smooth=PolygonLuaActions.Generate("lights_dim",new System.Collections.Generic.Dictionary<string,double>{{"seconds",2}});
+            Check(smooth.Contains("state.light_function = \"smooth\"") && smooth.Contains("2 * 30"),"Missing native smooth transition");
         });
         Test("Polygon Lua action catalog parameters quoting and preload generation", () => {
             Check(PolygonLuaActions.Catalog.Select(a=>a.Id).Distinct().Count()==PolygonLuaActions.Catalog.Length,"Duplicate action IDs");
@@ -2232,6 +2245,26 @@ end
             Check(PolygonLuaActions.Generate("spawner",new System.Collections.Generic.Dictionary<string,double>{{"indefinite",1}}).Contains("remaining=-1"),"Indefinite limit missing");
             bool rejected=false;try { PolygonLuaActions.Generate("spawner",new System.Collections.Generic.Dictionary<string,double>{{"interval",0}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Zero spawn interval accepted");
             var restored=new Level();restored.Load(level.Save().Clone());Check(restored.Polygons[0].LuaTriggerCode==level.Polygons[0].LuaTriggerCode,"Spawner not retained");
+        });
+        Test("Unchecked line split draws through and inside polygons without cutting", () => {
+            foreach(var ends in new[]{new[]{P(-500,500),P(1500,500)},new[]{P(200,200),P(800,800)},new[]{P(0,0),P(1000,1000)}}) {
+                var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=false;
+                string before=CanonicalSnapshot(level);int lines=level.Lines.Count;
+                editor.StartLine(ends[0].X,ends[0].Y);editor.ConnectLine(ends[1].X,ends[1].Y,false,false);editor.CommitHistory(true);
+                Check(editor.LineToolError==null && level.Polygons.Count==1 && level.Lines.Count==lines+1,"Unchecked split still cuts/rejects geometry: "+editor.LineToolError);
+                string after=CanonicalSnapshot(level);editor.Undo();Check(CanonicalSnapshot(level)==before,"Plain line undo failed");editor.Redo();Check(CanonicalSnapshot(level)==after,"Plain line redo failed");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Check(loaded.Polygons.Count==1 && loaded.Lines.Count==lines+1,"Plain line not saved");
+            }
+        });
+        Test("Delayed and conditional actions preserve wrapped scripts and preloads", () => {
+            string spawn=PolygonLuaActions.Generate("spawn");
+            string delayed=PolygonLuaActions.Generate("delay",body:spawn);
+            Check(delayed.Contains("-- Forge Ahead preload monster:8"),"Wrapped spawn lost preload");
+            var level=new Level();Box(level,0,0,1000,1000);level.Polygons[0].LuaTriggerEnabled=true;level.Polygons[0].LuaTriggerCode=delayed;
+            Check(PolygonLua.Generate(level).Contains("table.insert(CollectionsUsed, 9)"),"Delayed graphics missing");
+            Check(PolygonLuaActions.Generate("flag_if",text:"ready",body:spawn).Contains(spawn),"Conditional lost source");
+            bool rejected=false;try { PolygonLuaActions.Generate("flag_set",text:" "); }catch(ArgumentException) { rejected=true; }Check(rejected,"Empty flag accepted");
+            rejected=false;try { PolygonLuaActions.Generate("waves",new System.Collections.Generic.Dictionary<string,double>{{"waves",0}}); }catch(ArgumentException) { rejected=true; }Check(rejected,"Zero waves accepted");
         });
         Console.WriteLine(passed + " test groups passed.");
     }

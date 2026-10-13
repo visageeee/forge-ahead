@@ -24,14 +24,14 @@ namespace Weland
                 foreach(var parameter in selected.Parameters) {
                     var field=new Box(Orientation.Vertical,4);field.PackStart(new Label(parameter.Label) { Xalign=0,LineWrap=true,MaxWidthChars=32 },false,false,0);
                     var input=new SpinButton(parameter.Minimum,parameter.Maximum,parameter.Digits==0?1:0.1) { Numeric=true,Digits=(uint)parameter.Digits,Value=parameter.Default,WidthChars=7 };
-                    if(parameter.Id=="indefinite") {
-                        var check=new CheckButton("Indefinite") { Active=parameter.Default==1 };
+                    if(parameter.Id=="indefinite" || parameter.Id=="stop_destination") {
+                        var check=new CheckButton(parameter.Label) { Active=parameter.Default==1 };
                         check.Toggled+=(o,e)=>input.Value=check.Active?1:0;
                         inputs.Add(parameter.Id,input);parameters.PackStart(check,false,false,0);continue;
                     }
                     var names=PolygonLuaActions.NamedChoices(parameter.Id).ToList();
-                    if(parameter.Id=="polygon") {
-                        names.Add(new KeyValuePair<int,string>(-1,"Triggering polygon"));
+                    if(parameter.Id=="polygon" || parameter.Id=="source_polygon" || parameter.Id=="destination_polygon") {
+                        if(parameter.Minimum<0)names.Add(new KeyValuePair<int,string>(-1,"Triggering polygon"));
                         for(int i=0;i<Level.Polygons.Count;i++)names.Add(new KeyValuePair<int,string>(i,"Polygon "+i+" — "+Level.Polygons[i].Type));
                     }
                     if(parameter.Id=="light")for(int i=0;i<Level.Lights.Count;i++)names.Add(new KeyValuePair<int,string>(i,"Light "+i));
@@ -48,7 +48,7 @@ namespace Weland
                     }
                     inputs.Add(parameter.Id,input);field.PackStart(input,false,false,0);parameters.PackStart(field,false,false,0);
                 }
-                if(selected.HasText) { text=new Entry { Text="Trigger activated" };parameters.PackStart(text,false,false,0); }
+                if(selected.HasText) { parameters.PackStart(new Label(selected.TextLabel) { Xalign=0 },false,false,0);text=new Entry { Text=selected.TextDefault };parameters.PackStart(text,false,false,0); }
                 parameters.ShowAll();
             }
             category.Changed+=(sender,args)=> {
@@ -63,8 +63,14 @@ namespace Weland
                 if(action.Active<0)return;
                 try {
                     foreach(var input in inputs.Values)input.Update();
-                    string code=PolygonLuaActions.Generate(choices[action.Active].Id,inputs.ToDictionary(p=>p.Key,p=>p.Value.Value),text?.Text);
-                    source.Buffer.InsertAtCursor(code);source.GrabFocus();
+                    string id=choices[action.Active].Id;
+                    TextIter start,end;bool wrap=(id=="delay" || id=="flag_if") && source.Buffer.GetSelectionBounds(out start,out end);
+                    string body=null;
+                    if(wrap) { source.Buffer.GetSelectionBounds(out start,out end);body=source.Buffer.GetText(start,end,true); }
+                    string code=PolygonLuaActions.Generate(id,inputs.ToDictionary(p=>p.Key,p=>p.Value.Value),text?.Text,body);
+                    source.Buffer.BeginUserAction();
+                    if(wrap) { source.Buffer.GetSelectionBounds(out start,out end);source.Buffer.Delete(ref start,ref end); }
+                    source.Buffer.InsertAtCursor(code);source.Buffer.EndUserAction();source.GrabFocus();
                 } catch(Exception ex) { using var error=new MessageDialog(owner,DialogFlags.Modal,MessageType.Error,ButtonsType.Close,"Unable to insert action.");error.SecondaryText=ex.Message;error.Run(); }
             };
             var optionsScroll=new ScrolledWindow { HscrollbarPolicy=PolicyType.Never,VscrollbarPolicy=PolicyType.Automatic };

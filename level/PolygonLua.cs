@@ -114,6 +114,11 @@ function Triggers.init(restoring)
     Game._forge_ahead_polygon_fired = {}
     Game._forge_ahead_fog = nil
     Game._forge_ahead_spawners = nil
+    Game._forge_ahead_delays = nil
+    Game._forge_ahead_waves = nil
+    Game._forge_ahead_flags = nil
+    Game._forge_ahead_move_stops = nil
+    Game._forge_ahead_move_orders = nil
   end
   last_polygon = {}
   if restoring then
@@ -122,8 +127,75 @@ function Triggers.init(restoring)
     end
   end
 end
+local previous_killed = Triggers.monster_killed
+function Triggers.monster_killed(monster, ...)
+  if Game._forge_ahead_waves then
+    for _, wave in pairs(Game._forge_ahead_waves) do wave.alive[monster.index] = nil end
+  end
+  if Game._forge_ahead_move_stops then Game._forge_ahead_move_stops[monster.index] = nil end
+  if Game._forge_ahead_move_orders then Game._forge_ahead_move_orders[monster.index] = nil end
+  if previous_killed then previous_killed(monster, ...) end
+end
 function Triggers.postidle()
   if previous_postidle then previous_postidle() end
+  for index, destination in pairs(Game._forge_ahead_move_stops or {}) do
+    local monster = Monsters[index]
+    if not monster or monster.player or monster.vitality <= 0 then
+      Game._forge_ahead_move_stops[index] = nil
+    elseif monster.polygon and monster.polygon.index == destination then
+      -- Stop without triggering the monster's teleport-out behavior.
+      local teleports = monster.teleports_out
+      monster.teleports_out = false
+      monster.active = false
+      monster.teleports_out = teleports
+      -- Knockback can prevent deactivation; retry until it succeeds.
+      if not monster.active then Game._forge_ahead_move_stops[index] = nil end
+    end
+  end
+  -- Retry orders individually: activation/combat can replace a one-shot path.
+  -- Sort IDs for deterministic multiplayer behavior and limit path work per tick.
+  local orders = Game._forge_ahead_move_orders or {}
+  local ids = {}
+  for index in pairs(orders) do table.insert(ids, index) end
+  table.sort(ids)
+  local issued = false
+  for _, index in ipairs(ids) do
+    local order, monster = orders[index], Monsters[index]
+    local destination = Polygons[order.destination]
+    order.remaining = order.remaining - 1
+    if not monster or monster.player or not destination or order.remaining <= 0 or
+       (monster.vitality <= 0 and (monster.active or monster.vitality ~= -1)) or
+       monster.action == 'dying hard' or monster.action == 'dying soft' or monster.action == 'dying flaming' then
+      orders[index] = nil
+      if Game._forge_ahead_move_stops then Game._forge_ahead_move_stops[index] = nil end
+    elseif monster.polygon == destination then
+      orders[index] = nil
+    else
+      order.wait = order.wait - 1
+      if order.wait <= 0 and not issued then
+        monster:move_by_path(destination)
+        order.wait = monster.action == 'moving' and 90 or 30
+        issued = true
+      end
+    end
+  end
+  -- Snapshot before entry actions: a newly queued delay starts counting next tick.
+  local delays = Game._forge_ahead_delays or {}
+  Game._forge_ahead_delays = {}
+  for _, job in ipairs(delays) do
+    job.ticks = job.ticks - 1
+    if job.ticks > 0 then table.insert(Game._forge_ahead_delays, job)
+    else
+      local player, polygon = Players[job.player], Polygons[job.polygon]
+      if player and not player.dead and polygon then
+        local compile, error = load(""return function(player, polygon)\n"" .. job.code .. ""\nend"")
+        if compile then
+          local ok, reason = pcall(compile(), player, polygon)
+          if not ok then player:print(""Delayed action: "" .. tostring(reason)) end
+        else player:print(""Delayed action: "" .. tostring(error)) end
+      end
+    end
+  end
   local fired = Game._forge_ahead_polygon_fired or {}
   Game._forge_ahead_polygon_fired = fired
   for player in Players() do
@@ -148,6 +220,39 @@ function Triggers.postidle()
     else
       player._forge_ahead_heal = nil
       last_polygon[player.index] = nil
+    end
+  end
+  if Game._forge_ahead_waves then
+    for index = 0, #Polygons - 1 do
+      local wave = Game._forge_ahead_waves[index]
+      if wave and not wave.finished then
+        for id in pairs(wave.alive) do
+          local monster = Monsters[id]
+          if not monster or monster.vitality <= 0 then wave.alive[id] = nil end
+        end
+        if wave.pending > 0 then
+          wave.wait = wave.wait - 1
+          if wave.wait <= 0 then
+            local target = Polygons[index]
+            local x, y, count = 0, 0, 0
+            for vertex in target.endpoints() do x,y,count=x+vertex.x,y+vertex.y,count+1 end
+            if count >= 3 and MonsterTypes[wave.monster] then
+              while wave.pending > 0 do
+                local monster = Monsters.new(x/count,y/count,0,target,wave.monster)
+                if not monster then break end
+                wave.alive[monster.index] = true
+                wave.pending = wave.pending - 1
+                monster.active = true
+              end
+              wave.wait = 30 -- retry exhausted engine slots once per second
+            else wave.finished = true end
+          end
+        elseif next(wave.alive) == nil then
+          wave.left = wave.left - 1
+          if wave.left <= 0 then wave.finished = true
+          else wave.pending=wave.size;wave.wait=wave.pause end
+        end
+      end
     end
   end
   -- Iterate polygon order so simultaneous spawns are deterministic in multiplayer.

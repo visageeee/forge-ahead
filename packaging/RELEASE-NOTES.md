@@ -7,16 +7,23 @@ group selection, move/rotate/scale tools, configurable hover highlights, undo
 history, embedded Lua, fog/collection MML export, and a terminal editor with
 picture import and preview.
 
-### New in v0.4.0
+### New in v0.4.1
 
-- Polygon Lua entry triggers with reusable actions for ammo, healing, sounds,
-  monsters, lights, platforms, messages and fog.
-- Repeating monster spawners with frequency, total limit and indefinite options.
-- Smooth fog transitions, named action dropdowns and Lua syntax coloring.
-- Lua scripts and polygon triggers run when entering visual mode.
-- Pink trigger polygons and a refined script editor sidebar.
-- Recent-map startup window with New Map and Open options.
-- Penrose tessellation, improved line cutting/snapping, and smoother map interaction.
+- Delayed Lua actions and named flags for conditional polygon triggers.
+- Enemy waves with wave size, count and pauses after each defeated wave.
+- Dim/brighten all lights, with optional smooth light-state transitions.
+- Restore existing light definitions after scripted visual-mode sessions so
+  runtime light changes do not overwrite the map's starting lighting.
+- Move monsters between polygons, including dormant monsters, with individual
+  path retries and an optional stop on entering the destination polygon.
+- Allow ordinary lines through polygons when Split is unchecked.
+
+Existing inserted Lua actions retain their old source: replace movement/light
+presets to use the new options and fixes. Movement still depends on traversable
+routes and engine AI; crowded groups need further in-game testing. Smooth light
+changes begin at phase boundaries and replace flicker/pulse timing. In scripted
+visual-mode sessions, edits to existing light definitions are also discarded;
+new lights and surface assignments are retained.
 
 ### Downloads
 

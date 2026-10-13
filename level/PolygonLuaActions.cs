@@ -19,6 +19,7 @@ namespace Weland
         public string Id,Category,Label,Description;
         public LuaActionParameter[] Parameters;
         public bool HasText;
+        public string TextLabel="Message",TextDefault="Trigger activated";
     }
     public static class PolygonLuaActions
     {
@@ -42,7 +43,12 @@ namespace Weland
             Action("oxygen","Health & oxygen","Refill oxygen","Restores oxygen to the engine maximum."),
             Action("sound_player","Sounds","Play sound to entering player","Only the player who enters hears this sound.",Sound(),new LuaActionParameter("pitch","Pitch multiplier",1,0.1,4,2)),
             Action("sound_polygon","Sounds","Play sound from polygon","Positional sound audible to nearby players.",Sound(),Polygon(),new LuaActionParameter("pitch","Pitch multiplier",1,0.1,4,2)),
+            Action("monsters_move","Monsters","Move monsters between polygons","Orders living non-player monsters currently in the source polygon to walk to the destination. Includes friendly monsters. Requires a traversable route; combat AI may override the order.",new LuaActionParameter("source_polygon","Source polygon (-1 = triggering polygon)",-1,-1,32766),new LuaActionParameter("destination_polygon","Destination polygon",0,0,32766),new LuaActionParameter("stop_destination","Stop at destination",0,0,1)),
             Action("spawn","Monsters","Spawn monsters","Spawns active monsters on the floor, at the average of the polygon vertices. Preloads embedded physics or standard Marathon graphics. For external/custom physics, specify the matching extra collection ID.",new LuaActionParameter("monster","Monster type ID (8 = minor fighter)",8,1,32766),Polygon(),new LuaActionParameter("count","Number of monsters",1,1,16),new LuaActionParameter("collection","Extra collection ID (-1 = none)",-1,-1,31)),
+            Action("delay","Timing","Run an action after a delay","Select script code to wrap, or insert an empty block and replace its placeholder. Uses the original player and polygon; player actions are skipped if that player is dead when due.",new LuaActionParameter("seconds","Delay (seconds)",3,0.1,3600,1)),
+            new PolygonLuaAction { Id="flag_set",Category="Logic",Label="Set a named flag",Description="Flags are shared by all players in this level and survive saved games.",HasText=true,TextLabel="Flag name",TextDefault="reactor_online",Parameters=new[]{new LuaActionParameter("value","Value (0 = false, 1 = true)",1,0,1)} },
+            new PolygonLuaAction { Id="flag_if",Category="Logic",Label="Only run if a flag is set",Description="Select script code to wrap. Checks the flag when this block runs; an unset flag counts as false.",HasText=true,TextLabel="Flag name",TextDefault="reactor_online",Parameters=new[]{new LuaActionParameter("value","Required value (0 = false, 1 = true)",1,0,1)} },
+            Action("waves","Monsters","Start enemy waves","Spawns a wave immediately. After its monsters die, waits before the next wave. One encounter per destination polygon; re-entry does not restart it.",Polygon(),new LuaActionParameter("monster","Monster type",8,1,32766),new LuaActionParameter("count","Monsters per wave",3,1,32),new LuaActionParameter("waves","Number of waves",3,1,100),new LuaActionParameter("pause","Seconds between defeated waves",5,0.1,3600,1),new LuaActionParameter("collection","Extra collection ID (-1 = none)",-1,-1,31)),
             Action("spawner","Monsters","Start monster spawner at polygon","Starts one spawner per destination polygon. Spawns immediately, then at the interval. Maximum counts successful spawns; indefinite ignores this limit. Re-entering does not restart an existing spawner.",Polygon(),new LuaActionParameter("monster","Monster type",8,1,32766),new LuaActionParameter("interval","Seconds between spawns",5,0.1,3600,1),new LuaActionParameter("maximum","Maximum total monsters",10,1,10000),new LuaActionParameter("indefinite","Indefinite",0,0,1),new LuaActionParameter("collection","Extra collection ID (-1 = none)",-1,-1,31)),
             Action("spawner_stop","Monsters","Stop monster spawner at polygon","Stops spawning at this polygon. Monsters already spawned remain.",Polygon()),
             Action("fog_set","Fog","Set fog instantly","Changes fog for the whole view until another trigger changes it. Smaller depth means denser fog.",FogTarget(),FogDepth(),Red(),Green(),Blue(),new LuaActionParameter("landscapes","Affect landscapes (0 = no, 1 = yes)",0,0,1)),
@@ -52,8 +58,10 @@ namespace Weland
             Action("fog_color","Fog","Change fog color","Changes color without changing depth or enabling disabled fog.",FogTarget(),Red(),Green(),Blue()),
             Action("fog_depth","Fog","Change fog depth","Changes density without changing color or enabling disabled fog. Smaller depth means denser fog.",FogTarget(),FogDepth()),
             Action("teleport","World","Teleport player","Uses the normal in-level teleport effect.",Polygon()),
-            Action("light_on","World","Activate light","Activate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
-            Action("light_off","World","Deactivate light","Deactivate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
+            Action("lights_dim","Lights","Dim all lights","Subtracts percentage points from every light state, clamped to 0–100%. Zero seconds preserves pulse/flicker timing; a positive duration replaces it with smooth transitions. Takes effect as lights reach their next phase; can also affect light-controlled liquids.",new LuaActionParameter("amount","Brightness decrease (percentage points)",20,0,100,1),new LuaActionParameter("seconds","Transition seconds (0 = preserve timing)",0,0,600,1)),
+            Action("lights_brighten","Lights","Brighten all lights","Adds percentage points to every light state, clamped to 0–100%. Zero seconds preserves pulse/flicker timing; a positive duration replaces it with smooth transitions. Takes effect as lights reach their next phase; can also affect light-controlled liquids.",new LuaActionParameter("amount","Brightness increase (percentage points)",20,0,100,1),new LuaActionParameter("seconds","Transition seconds (0 = preserve timing)",0,0,600,1)),
+            Action("light_on","Lights","Activate light","Activate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
+            Action("light_off","Lights","Deactivate light","Deactivate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
             Action("platform_on","World","Activate platform / door","The destination polygon must be a platform.",Polygon()),
             Action("platform_off","World","Deactivate platform / door","The destination polygon must be a platform.",Polygon()),
             new PolygonLuaAction{Id="message",Category="Messages",Label="Show message",Description="Print text to the entering player's HUD.",HasText=true,Parameters=Array.Empty<LuaActionParameter>()}
@@ -410,7 +418,7 @@ end
                 catch(ArgumentException) { return match.Value; }
             });
         }
-        public static string Generate(string id,IDictionary<string,double> values=null,string text="Trigger activated")
+        public static string Generate(string id,IDictionary<string,double> values=null,string text="Trigger activated",string body=null)
         {
             var action=Catalog.SingleOrDefault(a=>a.Id==id)??throw new ArgumentException("Unknown Lua action.");
             var numbers=new Dictionary<string,string>();
@@ -424,6 +432,21 @@ end
             string ammo="Game.proper_item_accounting = true\nfor _, item in ipairs({2,4,6,7,9,14,16,23,35}) do player.items[item] = 999 end\n";
             string code;
             switch(id) {
+                case "flag_set":case "flag_if":
+                    if(string.IsNullOrWhiteSpace(text))throw new ArgumentException("Enter a flag name.");
+                    string flag=Quote(text.Trim());
+                    code=id=="flag_set"?"Game._forge_ahead_flags = Game._forge_ahead_flags or {}\nGame._forge_ahead_flags["+flag+"] = "+(N("value")=="1"?"true":"false")+"\n":
+                        "if ((Game._forge_ahead_flags and Game._forge_ahead_flags["+flag+"]) == true) == "+(N("value")=="1"?"true":"false")+" then\n"+(body??"-- Insert actions here\n")+"\nend\n";
+                    break;
+                case "delay":
+                    string delayed=body??"player:print('Delayed action')";
+                    code="";
+                    foreach(Match marker in Regex.Matches(delayed,@"(?m)^-- Forge Ahead preload (?:monster|collection):\d+\s*$"))code+=marker.Value.Trim()+"\n";
+                    foreach(Match spawn in Regex.Matches(delayed,@"Monsters\.new\([^\r\n]*, target, (\d+)\)"))code+="-- Forge Ahead preload monster:"+spawn.Groups[1].Value+"\n";
+                    code+="Game._forge_ahead_delays = Game._forge_ahead_delays or {}\ntable.insert(Game._forge_ahead_delays, {ticks=math.max(1,math.floor("+N("seconds")+" * 30 + 0.5)),player=player.index,polygon=polygon.index,code="+Quote(delayed)+"})\n";
+                    break;
+                case "waves":
+                    code="-- Forge Ahead preload monster:"+N("monster")+"\n"+(N("collection")=="-1"?"":"-- Forge Ahead preload collection:"+N("collection")+"\n")+"local target = "+Target()+"\nif target and MonsterTypes["+N("monster")+"] then\n  Game._forge_ahead_waves = Game._forge_ahead_waves or {}\n  if not Game._forge_ahead_waves[target.index] then\n    Game._forge_ahead_waves[target.index] = {monster="+N("monster")+",size="+N("count")+",left="+N("waves")+",pause=math.max(1,math.floor("+N("pause")+" * 30 + 0.5)),wait=0,alive={},pending="+N("count")+",finished=false}\n  end\nelse player:print('Wave polygon or monster type does not exist') end\n";break;
                 case "ammo": code=ammo;break;
                 case "weapons": code="Game.proper_item_accounting = true\nfor _, weapon in ipairs({{1,2},{3,1},{5,1},{8,1},{13,1},{15,1},{22,2},{34,1}}) do\n  player.items[weapon[1]] = math.max(player.items[weapon[1]], weapon[2])\nend\n"+ammo;break;
                 case "ammo_item":
@@ -436,6 +459,8 @@ end
                 case "oxygen":code="player.oxygen = 32767 -- engine clamps to full oxygen\n";break;
                 case "sound_player":code="player:play_sound("+N("sound")+", "+N("pitch")+")\n";break;
                 case "sound_polygon":code="local target = "+Target()+"\nif target then target:play_sound(target.x, target.y, target.floor.height, "+N("sound")+", "+N("pitch")+") else player:print('Sound polygon does not exist') end\n";break;
+                case "monsters_move":
+                    code="local source = "+(N("source_polygon")=="-1"?"polygon":"Polygons["+N("source_polygon")+"]")+"\nlocal destination = Polygons["+N("destination_polygon")+"]\nif source and destination then\n  if source ~= destination then\n    for monster in Monsters() do\n      if not monster.player and monster.polygon == source and\n         (monster.vitality > 0 or (not monster.active and monster.vitality == -1)) and\n         monster.action ~= 'dying hard' and monster.action ~= 'dying soft' and monster.action ~= 'dying flaming' then\n        monster:move_by_path(destination)\n        Game._forge_ahead_move_orders = Game._forge_ahead_move_orders or {}\n        Game._forge_ahead_move_orders[monster.index] = {destination=destination.index,wait=30 + monster.index % 15,remaining=3600}\n        Game._forge_ahead_move_stops = Game._forge_ahead_move_stops or {}\n        Game._forge_ahead_move_stops[monster.index] = "+(N("stop_destination")=="1"?"destination.index":"nil")+"\n      end\n    end\n  end\nelse player:print('Source or destination polygon does not exist') end\n";break;
                 case "spawn":code=(N("collection")=="-1"?"":"-- Forge Ahead preload collection:"+N("collection")+"\n")+"local target = "+Target()+"\nif target and MonsterTypes["+N("monster")+"] then\n  local x, y, count = 0, 0, 0\n  for vertex in target.endpoints() do\n    x, y, count = x + vertex.x, y + vertex.y, count + 1\n  end\n  if count < 3 then player:print('Invalid spawn polygon'); return end\n  x, y = x / count, y / count\n  -- Monsters.new uses a height relative to the floor: zero is floor height.\n  for i = 1, "+N("count")+" do\n    local monster = Monsters.new(x, y, 0, target, "+N("monster")+")\n    if monster then monster.active = true else player:print('Unable to spawn monster'); break end\n  end\nelse player:print('Spawn polygon or monster type does not exist') end\n";break;
                 case "spawner":
                     code="-- Forge Ahead preload monster:"+N("monster")+"\n"+(N("collection")=="-1"?"":"-- Forge Ahead preload collection:"+N("collection")+"\n")+"local target = "+Target()+"\nif target and MonsterTypes["+N("monster")+"] then\n  Game._forge_ahead_spawners = Game._forge_ahead_spawners or {}\n  if not Game._forge_ahead_spawners[target.index] then\n    Game._forge_ahead_spawners[target.index] = {monster="+N("monster")+",interval=math.max(1,math.floor("+N("interval")+" * 30 + 0.5)),wait=0,remaining="+(N("indefinite")=="1"?"-1":N("maximum"))+",finished=false}\n  end\nelse player:print('Spawn polygon or monster type does not exist') end\n";break;
@@ -452,6 +477,8 @@ end
                     if(id=="fog_set" || id=="fog_on" || id=="fog_off")code+="fog.active = "+(id=="fog_off"?"false":"true")+"\n";
                     break;
                 case "teleport":code="local target = "+Target()+"\nif target then player:teleport(target) else player:print('Teleport polygon does not exist') end\n";break;
+                case "lights_dim":case "lights_brighten":
+                    code="local change = "+(id=="lights_dim"?"-":"")+N("amount")+" / 100\nfor light in Lights() do\n  for i = 0, #light.states - 1 do\n    local state = light.states[i]\n    state.intensity = math.max(0, math.min(1, state.intensity + change))\n"+(N("seconds")=="0"?"":"    state.light_function = \"smooth\"\n    state.period = math.max(1, math.floor("+N("seconds")+" * 30 + 0.5))\n    state.delta_period = 0\n")+"  end\nend\n";break;
                 case "light_on":case "light_off":code="local light = Lights["+N("light")+"]\nif light then light.active = "+(id=="light_on"?"true":"false")+" else player:print('Light does not exist') end\n";break;
                 case "platform_on":case "platform_off":code="local target = "+Target()+"\nif target and target.platform then target.platform.active = "+(id=="platform_on"?"true":"false")+" else player:print('Destination is not a platform') end\n";break;
                 case "message":code="player:print("+Quote(text)+")\n";break;

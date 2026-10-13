@@ -592,7 +592,8 @@ namespace Weland
             if(endEdge!=-1 && TrySnapLinePoint(p,Level.Lines[endEdge],out Point onEnd) && onEnd.Equals(p)) {
                 if(!AttachLineEndpoint(p,endEdge,out short attachedEnd)) { AbortLine();return; }
             }
-            if (!Level.CutPolygonsWithLine(start,p,out bool handled,out string reason,LineSplitAll)) {
+            bool handled = false;
+            if (LineSplitAll && !Level.CutPolygonsWithLine(start,p,out handled,out string reason,true)) {
                 LineToolError = reason; AbortLine(); return;
             }
             if (handled) {

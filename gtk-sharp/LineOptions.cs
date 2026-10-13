@@ -18,7 +18,7 @@ namespace Weland
             };
             contents.PackStart(split, false, false, 0);
             contents.PackStart(new Label("Vertices and edges use the Select tool's hover colors and snap distance.\nGrid snapping still follows the grid.") { Xalign=0,LineWrap=true,MaxWidthChars=28 },false,false,0);
-            contents.PackStart(new Label("Draw across several polygons.\nCreates shared vertices at crossings\nand connects the complete path.\nStart and end outside polygons\nor on their boundaries.") { Xalign = 0, LineWrap = true, MaxWidthChars = 28 }, false, false, 0);
+            contents.PackStart(new Label("Unchecked: draw ordinary lines beneath polygons.\nChecked: cut across polygons.\nCreates shared vertices at crossings\nand connects the complete path.\nStart and end outside polygons\nor on their boundaries.") { Xalign = 0, LineWrap = true, MaxWidthChars = 28 }, false, false, 0);
             lineOptions.Add(contents); contents.ShowAll(); sidebar.PackStart(lineOptions, false, false, 0);
         }
     }

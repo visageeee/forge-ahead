@@ -629,3 +629,60 @@ The polygon Lua dialog has premade actions in a scrollable left sidebar with a p
 Start monster spawner at polygon spawns immediately and then at the selected interval in seconds. Maximum total monsters counts successful creations; Indefinite ignores that total limit. It runs after leaving the trigger. Re-entering does not reset an existing or completed spawner. Stop monster spawner at polygon removes it, allowing a later start to begin again. Progress survives saved games; a new level resets it. One spawner is supported per destination polygon. Graphics preload automatically as for Spawn monsters.
 
 The polygon Lua dialog places Insert, Cancel, Remove, and Apply on one footer row. Both script editors color Lua keywords, strings, comments, and numbers without changing source text.
+
+Timing > Run an action after a delay wraps selected Lua code, or inserts a default delayed message. The queued action receives the original player and triggering polygon; other local variables are not captured. It runs after the specified seconds even after leaving the polygon, unless the original player is dead or gone. Queued source and timers survive saved games.
+
+Logic > Set a named flag writes a level-wide boolean. Only run if a flag is set wraps selected code (or inserts a placeholder). Unset flags are false. Flags survive saved games and reset on a new level. Names are case-sensitive.
+
+Monsters > Start enemy waves uses one encounter per destination polygon, with monster type, monsters per wave, wave count and pause after defeat. The next wave waits for all tracked monsters in the current wave to die or disappear. Failed spawns retry once per second without consuming the quota. Re-entering does not restart an encounter. Encounter progress survives saved games.
+
+### Light Lua actions
+
+The Lights category includes Dim all lights and Brighten all lights. Amount is
+in percentage points (20 changes 70% to 50% when dimming). Every active and
+inactive light state's base intensity is adjusted and clamped to 0–100%.
+Existing functions, random variation, periods, tags and activation status remain
+unchanged. Changes take effect on the next light phase, not necessarily instantly.
+Random variation can still exceed the base intensity. Light-controlled liquid
+heights can also change. Repeated triggers accumulate; use Once per level for a
+single adjustment. These actions can be wrapped in Delay or a flag condition.
+
+Transition seconds on Dim/Brighten all lights defaults to zero (preserve existing
+light timing). A positive duration sets each state's function to smooth and its
+period to that duration, without random period variation. The first transition
+starts at the next phase boundary; this is not a synchronized whole-map fade.
+These timings remain in effect after the transition, replacing flicker settings.
+
+When returning from visual mode with embedded Lua, pre-existing light definitions
+are restored from the editor's original map. Runtime changes cannot become the
+map's starting lighting. Added lights and surface light assignments are retained.
+Edits to existing light definitions during scripted visual-mode sessions are also
+discarded; edit those definitions in Forge Ahead instead.
+
+### Directing monsters
+
+Monsters → Move monsters between polygons provides source and destination polygon
+dropdowns and editable IDs. Source -1 means the triggering polygon. It issues one
+pathfinding order to every living non-player monster in the source at execution
+time, including friendly monsters. The engine activates inactive monsters. Dead
+monsters, players and monsters elsewhere are skipped; equal source/destination
+is a no-op. A traversable route is required, and normal combat AI can override
+the order. This does not teleport monsters or guarantee arrival. Delay and flag
+wrappers can be used; delayed orders check occupants when the delay expires.
+
+Movement presets include never-activated monsters whose engine vitality is -1,
+while excluding death animations. Reinsert an older movement action to update
+its vitality filter.
+
+Move monsters between polygons has a Stop at destination checkbox. It deactivates
+each ordered monster on entering the destination polygon (not its exact center).
+This is a one-time stop: later sounds, sight or damage may reactivate it.
+Arrival tracking survives saves and clears on death. Teleport-out-on-deactivation
+is suppressed for this stop. A newer movement order replaces the pending stop.
+
+Movement orders now retry individually until arrival, death, or a two-minute
+timeout. Retries are staggered and limited to one per tick. Moving monsters get
+three seconds between retries; stationary monsters one second. This helps when
+activation/combat replaces paths or a path request temporarily fails. Blocked
+routes and crowd collisions can still prevent arrival. Reinsert old movement
+actions to enable this tracking.

@@ -90,6 +90,16 @@ namespace Weland
 
         public static void RestoreAfterVisualMode(Wadfile.DirectoryEntry original, Wadfile.DirectoryEntry returned)
         {
+            // Engine exports runtime Lua light changes. Keep original definitions in
+            // scripted maps, while retaining appended lights used by new surfaces.
+            if (original.Chunks.TryGetValue(Tag, out byte[] mapLua) && Read(mapLua).Count > 0 &&
+                original.Chunks.TryGetValue(Light.Tag, out byte[] originalLights)) {
+                returned.Chunks.TryGetValue(Light.Tag, out byte[] returnedLights);
+                byte[] lights = returnedLights != null && returnedLights.Length > originalLights.Length
+                    ? (byte[])returnedLights.Clone() : new byte[originalLights.Length];
+                Array.Copy(originalLights, lights, originalLights.Length);
+                returned.Chunks[Light.Tag] = lights;
+            }
             if(original.Chunks.TryGetValue(PolygonLua.Tag,out byte[] triggerData))returned.Chunks[PolygonLua.Tag]=(byte[])triggerData.Clone();
             else returned.Chunks.Remove(PolygonLua.Tag);
             if (original.Chunks.TryGetValue(Tag, out byte[] bytes)) returned.Chunks[Tag] = (byte[])bytes.Clone();
