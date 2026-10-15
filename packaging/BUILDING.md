@@ -82,3 +82,8 @@ Apple notarization and a trusted Windows publisher signature are not configured.
 The build currently uses .NET 8; plan a framework upgrade before its support ends.
 GTK packages are resolved from current Homebrew/MSYS2 repositories, so rebuilding
 later may change native dependency versions. CI logs record installed packages.
+
+Mac packaging recompiles the merged GSettings schemas with Homebrew GLib and
+checks `org.gtk.Settings.FileChooser` before signing. Copying schema XML alone
+is insufficient: the relocated app needs `gschemas.compiled` in its bundled
+`share/glib-2.0/schemas` directory for Open/Save dialogs.

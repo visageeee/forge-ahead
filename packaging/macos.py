@@ -14,6 +14,28 @@ def run(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
+def compile_settings_schemas(native, glib):
+    """Rebuild the merged cache; Homebrew formula prefixes may omit it."""
+    schemas = native / 'share' / 'glib-2.0' / 'schemas'
+    required = schemas / 'org.gtk.Settings.FileChooser.gschema.xml'
+    if not required.is_file():
+        raise RuntimeError(f'Missing GTK file chooser schema: {required}')
+    # Do not retain a cache copied from an unrelated dependency prefix.
+    (schemas / 'gschemas.compiled').unlink(missing_ok=True)
+    subprocess.run([str(glib / 'bin' / 'glib-compile-schemas'), '--strict', str(schemas)], check=True)
+    cache = schemas / 'gschemas.compiled'
+    if not cache.is_file() or cache.stat().st_size == 0:
+        raise RuntimeError('GTK settings schema compilation produced no cache')
+    env = os.environ.copy()
+    env.update(GSETTINGS_SCHEMA_DIR=str(schemas), XDG_DATA_DIRS=str(native / 'share'),
+               XDG_DATA_HOME=str(native / 'share'), GSETTINGS_BACKEND='memory')
+    keys = subprocess.check_output(
+        [str(glib / 'bin' / 'gsettings'), '--schemadir', str(schemas),
+         'list-keys', 'org.gtk.Settings.FileChooser'], env=env, text=True)
+    if 'sort-column' not in keys.splitlines():
+        raise RuntimeError('Bundled GTK file chooser settings could not be validated')
+
+
 def main(rid):
     expected = {'osx-arm64': 'arm64', 'osx-x64': 'x86_64'}
     if rid not in expected or platform.machine() != expected[rid]:
@@ -41,6 +63,7 @@ def main(rid):
         for name in ('share', 'etc'):
             if (prefix / name).is_dir():
                 shutil.copytree(prefix / name, native / name, dirs_exist_ok=True, symlinks=False)
+    compile_settings_schemas(native, Path(run('brew', '--prefix', 'glib')))
     copied = {}  # canonical source -> flat relocatable destination
     names = {}
 
