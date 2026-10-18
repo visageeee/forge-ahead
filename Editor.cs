@@ -29,7 +29,8 @@ namespace Weland
         Move,
         Rotate,
         Scale,
-        Ring
+        Ring,
+        BakeLighting
     }
 
     [Flags]
@@ -121,6 +122,7 @@ namespace Weland
             {
                 if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
                 historyGesture = false;
+                PlacingBakeLight=false; draggingBakeLight=false; ClearLightingPreview();
                 CancelPaste();
                 CancelBox();
                 CancelSelectionBox();
@@ -158,7 +160,7 @@ namespace Weland
                     Selection.Clear();
                     Selection.Annotation = selected_annotation;
                 }
-                else if (value != Tool.Select && value != Tool.Pan && value != Tool.Move && value != Tool.Rotate && value != Tool.Scale)
+                else if (value != Tool.Select && value != Tool.Pan && value != Tool.Move && value != Tool.Rotate && value != Tool.Scale && value != Tool.BakeLighting)
                 {
                     Selection.Clear();
                 }
@@ -1409,6 +1411,8 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            if (Tool == Tool.BakeLighting || PlacingBakeLight) { BakeResultMessage=null; bakeClickConsumed=true; PlacingBakeLight=false; draggingBakeLight=!RightClick(mods); if (draggingBakeLight) { BakeLightPosition=new Point(X,Y); HasBakeLight=true; UpdateLightingPreview(); } else ClearLightingPreview(); return; }
+            ClearLightingPreview();
             if (Pasting)
             {
                 pasteConsumed = true;
@@ -1625,6 +1629,7 @@ namespace Weland
 
         public void Motion(short X, short Y, EditorModifiers mods)
         {
+            if (bakeClickConsumed || PlacingBakeLight) { if(draggingBakeLight) { BakeLightPosition=new Point(X,Y); UpdateLightingPreview(); } return; }
             if (pasteConsumed) return;
             if (rightButtonMove || Tool == Tool.Move)
             {
@@ -1793,6 +1798,7 @@ namespace Weland
 
         public void ButtonRelease(short X, short Y, EditorModifiers mods)
         {
+            if (bakeClickConsumed) { if(draggingBakeLight) {BakeLightPosition=new Point(X,Y);UpdateLightingPreview();} draggingBakeLight=false;bakeClickConsumed=false; return; }
             if (pasteConsumed) { pasteConsumed = false; historyGesture = false; return; }
             historyGesture = false;
             if (rightButtonMove)

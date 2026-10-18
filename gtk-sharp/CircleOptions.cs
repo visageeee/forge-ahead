@@ -87,6 +87,7 @@ namespace Weland
             sidebar.PackStart(boxOptions, false, false, 0);
             SetupRingOptions(sidebar);
             SetupSelectOptions(sidebar);
+            SetupLightingOptions(sidebar);
             SetupLineOptions(sidebar);
             SetupHistory(sidebar);
             grid1.Attach(sidebar, 5, 0, 1, 1);
@@ -94,6 +95,7 @@ namespace Weland
             circleOptions.Hide();
             boxOptions.Hide();
             ringOptions.Hide();
+            lightingOptions.Hide();
             if (editor.Tool == Tool.Line) lineOptions.Show(); else lineOptions.Hide();
             if (editor.Tool == Tool.Select) selectOptions.Show();
             else selectOptions.Hide();

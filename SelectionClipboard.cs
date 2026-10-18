@@ -35,6 +35,7 @@ namespace Weland
             var positions = points.Select(i => Level.Endpoints[i]).Concat(objects.Select(i => new Point(Level.Objects[i].X, Level.Objects[i].Y)))
                 .Concat(notes.Select(i => new Point(Level.Annotations[i].X, Level.Annotations[i].Y))).ToList();
             if (positions.Count == 0) { reason = "Select something to copy first."; return false; }
+            clipboardFromFile = false;
             clipboardPolygonIdentities = Level.Polygons.ToList();
             clipboard = new Level(); clipboard.Load(Level.Save().Clone());
             clipboardPoints = points; clipboardLines = lines; clipboardPolygons = polygons;
@@ -76,6 +77,7 @@ namespace Weland
                 return new Point(ClampCoordinate((int)a), ClampCoordinate((int)b));
             }
             var trial = new Level(); trial.Load(Level.Save().Clone());
+            short[] importedLights=null;
             if (trial.Endpoints.Count + clipboardPoints.Count > short.MaxValue || trial.Lines.Count + clipboardLines.Count > short.MaxValue ||
                 trial.Polygons.Count + clipboardPolygons.Count > short.MaxValue || trial.Objects.Count + clipboardObjects.Count > short.MaxValue ||
                 trial.Sides.Count + clipboardLines.Count * 2 > short.MaxValue || trial.Annotations.Count + clipboardNotes.Count > short.MaxValue ||
@@ -104,6 +106,7 @@ namespace Weland
                 if (index < 0) return index;
                 if (polygons.TryGetValue(index, out short copied)) return copied;
                 if (index >= clipboard.Polygons.Count) return -1;
+                if (clipboardFromFile) return -1;
                 int current = Level.Polygons.IndexOf(clipboardPolygonIdentities[index]);
                 if (current != -1) return (short)current;
                 var original = clipboard.Polygons[index];
@@ -153,6 +156,10 @@ namespace Weland
                     else { line.CounterclockwisePolygonOwner = pair.Value; line.CounterclockwisePolygonSideIndex = sideIndex; }
                 }
             }
+            if (clipboardFromFile) {
+                try { importedLights=ImportClipboardResources(trial,polygons.Values,trial.Sides.Select((side,i)=>new {side,i}).Where(x=>polygons.Values.Contains(x.side.PolygonIndex)).Select(x=>(short)x.i)); }
+                catch(Exception ex) {reason=ex.Message;return false;}
+            }
             var validationOriginal = new Level(); validationOriginal.Load(trial.Save().Clone());
             if (!trial.RepairReflection(validationOriginal, new HashSet<short>(points.Values), out reason))
             { reason = reason.Replace("reflection", "copy"); return false; }
@@ -160,6 +167,10 @@ namespace Weland
             foreach (int i in clipboardObjects)
             {
                 var obj = CloneClipboardItem(clipboard.Objects[i]); Point p = Offset(new Point(obj.X, obj.Y)); obj.X = p.X; obj.Y = p.Y;
+                if (clipboardFromFile && obj.Type==ObjectType.Sound && obj.UseLightForVolume) {
+                    if(obj.Light>=importedLights.Length){reason="Invalid sound light reference.";return false;}
+                    obj.Light=importedLights[obj.Light];
+                }
                 obj.PolygonIndex = polygons.TryGetValue(obj.PolygonIndex, out short target) ? target : trial.GetEnclosingPolygon(p);
                 if (obj.PolygonIndex == -1) { reason = "Objects must be pasted inside a polygon."; return false; }
                 selected.Object = (short)trial.Objects.Count; trial.Objects.Add(obj);
@@ -178,6 +189,75 @@ namespace Weland
             { reason = "The copied geometry already exists here."; return false; }
             historyGesture = false; SetUndo("Paste selection"); Level.Load(after); Selection.CopyFrom(selected);
             CancelPaste(); Changed = Dirty = RedrawAll = true; CommitHistory(); return true;
+        }
+        public bool PathfinderSelection(bool subtract,bool reverse,out string reason) {
+            PrepareHistoryNavigation();var ids=new HashSet<short>(Selection.Polygons);if(Selection.Polygon>=0)ids.Add(Selection.Polygon);
+            if(ids.Count!=2){reason="Select exactly two polygons. A is the lower polygon ID.";return false;}
+            var pair=ids.OrderBy(i=>i).ToArray();if(reverse)Array.Reverse(pair);
+            var trial=new Level();trial.Load(Level.Save().Clone());int oldCount=trial.Polygons.Count;
+            if(!trial.Pathfinder(pair[0],pair[1],subtract,out reason)){reason=reason?.Replace("Circle","Pathfinder").Replace("circle","polygon").Replace("reflection","operation");return false;}
+            SetUndo(subtract?"Pathfinder difference":"Pathfinder union");Level.Load(trial.Save().Clone());Selection.Clear();
+            for(int i=oldCount-2;i<Level.Polygons.Count;i++)Selection.Polygons.Add((short)i);
+            Changed=Dirty=RedrawAll=true;CommitHistory();return true;
+        }
+        bool clipboardFromFile;
+        public bool SaveSelectionFile(string path, out string reason)
+        {
+            if (!CopySelection(out reason)) return false;
+            foreach(short index in clipboardPolygons)foreach(short sideIndex in clipboard.Polygons[index].SideIndexes.Take(clipboard.Polygons[index].VertexCount)) {
+                if(sideIndex<0)continue;var side=clipboard.Sides[sideIndex];
+                if(side.IsControlPanel && side.ControlPanelType>=0 && side.ControlPanelType<Side.ControlPanelClasses.Length && Side.ControlPanelClasses[side.ControlPanelType]==ControlPanelClass.Terminal) {
+                    reason="Terminal panels need level terminal data and cannot yet be saved as selections.";return false;
+                }
+            }
+            var target = new Level(); target.Load(clipboard.Save().Clone());
+            target.Endpoints.Clear(); target.EndpointLines.Clear(); target.EndpointPolygons.Clear();
+            target.Lines.Clear(); target.Polygons.Clear(); target.Sides.Clear(); target.Platforms.Clear();
+            target.Objects.Clear(); target.Annotations.Clear(); target.Chunks.Clear();
+            var exporter = new Editor { Level=target, Selection=new Selection(), clipboard=clipboard, clipboardPoints=clipboardPoints,
+                clipboardLines=clipboardLines, clipboardPolygons=clipboardPolygons, clipboardObjects=clipboardObjects,
+                clipboardNotes=clipboardNotes, clipboardOrigin=clipboardOrigin, clipboardPolygonIdentities=clipboardPolygonIdentities };
+            if (!exporter.PasteSelection(clipboardOrigin.X,clipboardOrigin.Y,out reason)) return false;
+            var wad=new MapFile(); wad.Directory[0]=target.Save();
+            ScenarioMaps.SaveAtomic(wad,path,null); return true;
+        }
+        public bool LoadSelectionFile(string path,out string reason)
+        {
+            var wad=new Wadfile(); wad.Load(path);
+            if(wad.Directory.Count!=1) {reason="Choose a single saved selection, not a merged scenario.";return false;}
+            var source=new Level(); source.Load(wad.Directory.Values.First());
+            var importer=new Editor {Level=source,Selection=new Selection()}; importer.SelectAllGeometry();
+            if(!importer.CopySelection(out reason))return false;
+            clipboard=importer.clipboard;clipboardPoints=importer.clipboardPoints;clipboardLines=importer.clipboardLines;
+            clipboardPolygons=importer.clipboardPolygons;clipboardObjects=importer.clipboardObjects;clipboardNotes=importer.clipboardNotes;
+            clipboardOrigin=importer.clipboardOrigin;clipboardPolygonIdentities=new List<Polygon>();clipboardFromFile=true;
+            return BeginPaste(out reason);
+        }
+        short[] ImportClipboardResources(Level trial, IEnumerable<short> polygons,IEnumerable<short> sides)
+        {
+            // Reuse byte-identical settings so repeated placements do not grow tables.
+            short[] Merge<T>(List<T> source,List<T> dest) where T:ISerializableBE,new()
+            {
+                byte[] Bytes(T item) {using(var m=new MemoryStream()){item.Save(new BinaryWriterBE(m));return m.ToArray();}}
+                var data=dest.Select(Bytes).ToList();var map=new short[source.Count];
+                for(int i=0;i<source.Count;i++) {var bytes=Bytes(source[i]);int found=data.FindIndex(b=>b.SequenceEqual(bytes));
+                    if(found<0){if(dest.Count>=short.MaxValue)throw new InvalidOperationException("Too many imported resource settings.");found=dest.Count;dest.Add(CloneClipboardItem(source[i]));data.Add(bytes);}map[i]=(short)found;}
+                return map;
+            }
+            short Ref(short i,short[] map) {if(i<0)return i;if(i>=map.Length)throw new InvalidDataException("Selection has an invalid resource reference.");return map[i];}
+            var lights=Merge(clipboard.Lights,trial.Lights);
+            var media=clipboard.Medias.Select(CloneClipboardItem).ToList();foreach(var m in media)m.LightIndex=Ref(m.LightIndex,lights);
+            var medias=Merge(media,trial.Medias);var ambient=Merge(clipboard.AmbientSounds,trial.AmbientSounds);var random=Merge(clipboard.RandomSounds,trial.RandomSounds);
+            foreach(short i in polygons){var p=trial.Polygons[i];p.FloorLight=Ref(p.FloorLight,lights);p.CeilingLight=Ref(p.CeilingLight,lights);p.MediaLight=Ref(p.MediaLight,lights);p.MediaIndex=Ref(p.MediaIndex,medias);p.AmbientSound=Ref(p.AmbientSound,ambient);p.RandomSound=Ref(p.RandomSound,random);
+                if(p.Type==PolygonType.LightOnTrigger || p.Type==PolygonType.LightOffTrigger)p.Permutation=Ref(p.Permutation,lights);}
+            foreach(short i in sides){var side=trial.Sides[i];side.PrimaryLightsourceIndex=Ref(side.PrimaryLightsourceIndex,lights);side.SecondaryLightsourceIndex=Ref(side.SecondaryLightsourceIndex,lights);side.TransparentLightsourceIndex=Ref(side.TransparentLightsourceIndex,lights);
+                if(side.IsControlPanel) {
+                    if(side.ControlPanelType<0 || side.ControlPanelType>=Side.ControlPanelClasses.Length)throw new InvalidDataException("Invalid control panel type.");
+                    var type=Side.ControlPanelClasses[side.ControlPanelType];
+                    if(type==ControlPanelClass.LightSwitch)side.ControlPanelPermutation=Ref(side.ControlPanelPermutation,lights);
+                    if(type==ControlPanelClass.Terminal)throw new InvalidOperationException("Terminal panels require their level terminal data; remove them from this saved selection first.");
+                }}
+            return lights;
         }
         static T CloneClipboardItem<T>(T item) where T : ISerializableBE, new()
         {

@@ -1366,6 +1366,13 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkMenuItem" id="optimize_selected_geometry">
+                        <property name="visible">True</property>
+                        <property name="label">Optimize selected geometry</property>
+                        <signal name="activate" handler="OnOptimizeSelectedGeometry" swapped="no"/>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkMenuItem" id="cleanup-wall-surfaces">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
@@ -2238,6 +2245,17 @@
                     <property name="expand">False</property>
                     <property name="homogeneous">True</property>
                   </packing>
+                </child>
+                <child>
+                  <object class="GtkRadioToolButton" id="lightingButton">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text">Bake lighting: click to place a light for selected floors</property>
+                    <property name="label">Bake lighting</property>
+                    <property name="icon-name">weather-clear</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
                 </child>
                 <child>
                   <object class="GtkRadioToolButton" id="fillButton">

@@ -686,3 +686,56 @@ three seconds between retries; stationary monsters one second. This helps when
 activation/combat replaces paths or a path request temporarily fails. Blocked
 routes and crowd collisions can still prevent arrival. Reinsert old movement
 actions to enable this tracking.
+
+### Tag Lua actions
+
+The Tags category offers Activate tag, Deactivate tag and Toggle tag, with a
+Tag ID from 1 to 32767. Assign that tag to lights/platforms in the map first.
+These actions use the engine's tag activation rules and update matching tag
+switches. Toggle turns the group off if any tagged member is active, otherwise
+on; it does not invert each member individually. Platform restrictions still
+apply. Tags with no matching objects have no effect. Delay and flag wrappers
+can be combined with these actions.
+
+### Saved selections and Pathfinder
+
+The Select sidebar has Export selected and Import from file. Saved selections
+are standalone `.sceA` files containing only selected geometry and contained
+objects/notes, plus light/liquid/sound settings. Loading starts the normal paste
+preview; click to place, Escape to cancel, and Undo to remove the placement.
+Imported settings are remapped and byte-identical settings reused. Shapes and
+sound assets still come from the destination scenario. Terminal panels and
+built-in links to polygons outside the selection are not supported. Global Lua,
+physics and terminal resources are not exported. Polygon Lua text and tag IDs
+are retained literally: review embedded IDs and dependencies after reuse.
+
+Height and light swatches show a check mark and orange selection border that
+remains visible without keyboard focus. Text switches between black and white
+for contrast against the swatch.
+
+Pathfinder works on exactly two selected normal polygons. A is the lower polygon
+ID. Join computes their union; A − B and B − A subtract the other polygon. Both
+inputs are consumed. Results inherit settings from A (or B for B − A), keep
+perimeter wall textures where possible, and use convex pieces of at most eight
+vertices. Objects/notes in removed areas are removed. Intersections are rounded
+to map coordinates. Failed operations leave the map unchanged; successful ones
+are one undo step. Polygon Lua triggers and incoming built-in polygon references
+must be removed before the operation; arbitrary Lua numeric IDs are not rewritten.
+Difference needs overlapping input areas, such as overlapping geometry already
+in a map; it does not subtract disjoint adjacent polygons. It does not relax the
+normal drawing tools' overlap checks.
+
+Pathfinder inserts rounded intersections on both sides of shared edges before
+convex decomposition, avoiding crossing edges in diagonal union/difference results.
+
+### Optimize selected geometry
+
+Special → Optimize selected geometry repeatedly merges compatible neighboring
+selected normal polygons, preferring longer shared edges. Every accepted merge
+reduces the polygon count and must remain convex with at most eight vertices.
+Heights, textures/origins, lighting, media, sound settings and flags must match.
+Shared transparent surfaces/control panels, polygon Lua and built-in incoming
+references prevent merging. The result remains selected and the whole command
+is one undo step; a no-op does not add history. This is a conservative greedy
+merge, not a guarantee of the mathematically smallest decomposition. As with
+deleting polygons, IDs may change: review literal IDs in arbitrary Lua scripts.

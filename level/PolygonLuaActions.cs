@@ -33,7 +33,74 @@ namespace Weland
         static LuaActionParameter Blue()=>new LuaActionParameter("blue","Blue (0–1)",0.5,0,1,3);
         static LuaActionParameter Sound()=>new LuaActionParameter("sound","Sound ID",0,0,32766);
         static PolygonLuaAction Action(string id,string category,string label,string description,params LuaActionParameter[] parameters)=>new PolygonLuaAction{Id=id,Category=category,Label=label,Description=description,Parameters=parameters};
+        static LuaActionParameter SunAzimuth()=>new LuaActionParameter("azimuth","Azimuth (degrees; 0 = north)",250,0,360,1);
+        static LuaActionParameter SunDuration()=>new LuaActionParameter("seconds","Duration (seconds)",300,0.1,36000,1);
+        static LuaActionParameter[] SunSettings(bool fade)=>new[]{
+            new LuaActionParameter("path_position","Position on sun path (0–1)",1,0,1,3),
+            new LuaActionParameter("size","Sun diameter (degrees)",1,.05,20,2),
+            new LuaActionParameter("red","Red",1,0,1,3),new LuaActionParameter("green","Green",.91,0,1,3),new LuaActionParameter("blue","Blue",.72,0,1,3),
+            new LuaActionParameter("brightness","Brightness",1,0,4,2),new LuaActionParameter("shaft_strength","Shaft strength",1,0,4,2),
+            new LuaActionParameter("glare_strength","Glare strength",1,0,4,2),new LuaActionParameter("bloom_strength","Bloom strength",1,0,4,2)
+        }.Concat(fade?new[]{SunDuration()}:new LuaActionParameter[0]).ToArray();
+        static LuaActionParameter[] SunCycle(bool sunset)=>new[]{SunDuration(),
+            new LuaActionParameter("start","Starting path position",sunset?1:0,0,1,3),
+            new LuaActionParameter("end","Ending path position",sunset?0:1,0,1,3),
+            new LuaActionParameter("start_brightness","Starting brightness",sunset?1:.2,0,4,2),
+            new LuaActionParameter("end_brightness","Ending brightness",sunset?0:1,0,4,2)};
+        static readonly string[] SunFields={"path_position","size","red","green","blue","brightness","shaft_strength","glare_strength","bloom_strength"};
+        static string SunCode(string id,Func<string,string> number) {
+            if(id=="sun_path")return "-- Forge Ahead sun path: "+string.Join(";",Enumerable.Range(0,8).Select(i=>number("az"+i)+","+number("el"+i)))+"\n-- Declared automatically at level-script load; no action runs here.\n";
+            string code="local ok, sun = pcall(function() local s = Level.sun; local p = s.path_position; return s end)\nif not ok or not sun then\n  player:print('Sun actions require Sprintathon with Level.sun support')\nelse\n";
+            if(id=="sun_reset")return code+"Game._forge_ahead_sun = nil\n"+string.Join("",SunFields.Where(f=>f!="path_position").Concat(new[]{"enabled"}).Select(f=>"sun."+f+" = nil\n"))+"end\n";
+            code+="local current = {enabled=sun.enabled}\n"+string.Join("",SunFields.Select(f=>"current."+f+" = sun."+f+"\n"));
+            if(id=="sun_stop" || id=="sun_on" || id=="sun_off") {
+                if(id!="sun_stop")code+="current.enabled = "+(id=="sun_on"?"true":"false")+"\nsun.enabled = current.enabled\n";
+                return code+"Game._forge_ahead_sun = {current=current}\nend\n";
+            }
+            code="-- Forge Ahead sun path required\n"+code;
+            code+="current.enabled = true\nsun.enabled = true\n";
+            bool cycle=id=="sunrise" || id=="sunset";
+            if(cycle) {
+                bool sunset=id=="sunset";
+                code+="current.path_position = "+number("start")+"\ncurrent.brightness = "+number("start_brightness")+"\ncurrent.red = 1\ncurrent.green = "+(sunset?"0.91":"0.35")+"\ncurrent.blue = "+(sunset?"0.72":"0.15")+"\n";
+                code+="local target = {}\nfor key, value in pairs(current) do target[key] = value end\ntarget.path_position = "+number("end")+"\ntarget.brightness = "+number("end_brightness")+"\ntarget.green = "+(sunset?"0.35":"0.91")+"\ntarget.blue = "+(sunset?"0.15":"0.72")+"\n";
+            } else code+="local target = {enabled=true, "+string.Join(", ",SunFields.Select(f=>f+"="+number(f)))+"}\n";
+            if(id=="sun_set")code+="current = target\nGame._forge_ahead_sun = {current=current}\n";
+            else code+="Game._forge_ahead_sun = {current=current, from=current, target=target, elapsed=0, ticks=math.max(1,math.floor("+number("seconds")+" * 30 + 0.5))}\n";
+            return code+"for key, value in pairs(current) do sun[key] = value end\nend\n";
+        }
+        public static string SunPathDeclaration(IEnumerable<string> codes) {
+            var scripts=codes.ToArray();string selected=null;
+            foreach(string code in scripts)foreach(Match match in Regex.Matches(code,@"^-- Forge Ahead sun path: ([^\r\n]+)$",RegexOptions.Multiline)) {
+                var steps=match.Groups[1].Value.Split(';');
+                if(steps.Length!=8)throw new ArgumentException("Sun path must contain exactly eight steps.");
+                var values=new List<string>();
+                foreach(string step in steps) {
+                    var pair=step.Split(',');double az,el;
+                    if(pair.Length!=2 || !double.TryParse(pair[0],NumberStyles.Float,CultureInfo.InvariantCulture,out az) || !double.TryParse(pair[1],NumberStyles.Float,CultureInfo.InvariantCulture,out el) || double.IsNaN(az) || double.IsNaN(el) || double.IsInfinity(az) || double.IsInfinity(el) || az<0 || az>360 || el< -90 || el>90)
+                        throw new ArgumentException("Invalid sun path angle.");
+                    values.Add("{azimuth="+az.ToString("0.########",CultureInfo.InvariantCulture)+", elevation="+el.ToString("0.########",CultureInfo.InvariantCulture)+"}");
+                }
+                string path="{\n  "+string.Join(",\n  ",values)+"\n}";
+                if(selected!=null && selected!=path)throw new ArgumentException("A level supports one sun path. Use the same eight steps in every path declaration.");
+                selected=path;
+            }
+            bool explicitPath=selected!=null;
+            if(!explicitPath && !scripts.Any(c=>c.Contains("-- Forge Ahead sun path required")))return "";
+            if(!explicitPath)selected="{\n  "+string.Join(",\n  ",Enumerable.Range(0,8).Select(i=>"{azimuth=250, elevation="+(-3+38.0*i/7).ToString("0.########",CultureInfo.InvariantCulture)+"}"))+"\n}";
+            return "-- Eight-step sun path: declared before lighting loads.\ndo\n  local ok, sun = pcall(function() local s = Level.sun; local path = s.path; return s end)\n  if ok and sun then\n"+
+                (explicitPath?"":"    if sun.path == nil then\n")+"    sun.path = "+selected+"\n"+(explicitPath?"":"    end\n")+"  end\nend\n";
+        }
         public static readonly PolygonLuaAction[] Catalog={
+            Action("sun_path","Sun","Declare eight-step sun path","One path per level, declared before lighting loads. Insert on an enabled polygon trigger; the editor moves the declaration to level-script top level.",Enumerable.Range(0,8).SelectMany(i=>new[]{new LuaActionParameter("az"+i,"Step "+(i+1)+" azimuth",250,0,360,2),new LuaActionParameter("el"+i,"Step "+(i+1)+" elevation",-3+38.0*i/7,-90,90,3)}).ToArray()),
+            Action("sun_set","Sun","Set sun instantly","Sprintathon only. Enables the visible sun with these settings; respects player graphics toggles.",SunSettings(false)),
+            Action("sun_fade","Sun","Transition sun smoothly","Moves from the current sun settings to these values. Moves along the declared eight-step path and replaces the running transition.",SunSettings(true)),
+            Action("sunrise","Sun","Smooth sunrise","Starts at the chosen path position with warm dawn colors, then rises to daylight. Runs after leaving the polygon.",SunCycle(false)),
+            Action("sunset","Sun","Smooth sunset","Runs backward along the declared path, warms toward sunset and fades to the ending brightness.",SunCycle(true)),
+            Action("sun_on","Sun","Enable sun","Enables the sun and stops its current transition. Respects player graphics toggles."),
+            Action("sun_off","Sun","Disable sun","Hides the visible sun and stops its transition; independent landscape shafts retain their settings."),
+            Action("sun_stop","Sun","Stop sun transition","Freezes the current sun settings."),
+            Action("sun_reset","Sun","Reset sun to preferences","Stops the transition and clears appearance overrides; the precomputed path remains declared."),
             Action("ammo","Ammo & weapons","Refill all ammo","Fill available ammunition to carrying limits."),
             Action("weapons","Ammo & weapons","All weapons and ammo","Includes dual pistols and shotguns; leaves fists intact."),
             Action("ammo_item","Ammo & weapons","Give an ammo item","Stock ammo IDs: 2, 4, 6, 7, 9, 14, 16, 23, 35.",new LuaActionParameter("item","Ammo item ID",2,0,35),new LuaActionParameter("count","Magazines / packs to add",5,1,999)),
@@ -62,6 +129,9 @@ namespace Weland
             Action("lights_brighten","Lights","Brighten all lights","Adds percentage points to every light state, clamped to 0–100%. Zero seconds preserves pulse/flicker timing; a positive duration replaces it with smooth transitions. Takes effect as lights reach their next phase; can also affect light-controlled liquids.",new LuaActionParameter("amount","Brightness increase (percentage points)",20,0,100,1),new LuaActionParameter("seconds","Transition seconds (0 = preserve timing)",0,0,600,1)),
             Action("light_on","Lights","Activate light","Activate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
             Action("light_off","Lights","Deactivate light","Deactivate a light by ID.",new LuaActionParameter("light","Light ID",0,0,32766)),
+            Action("tag_on","Tags","Activate tag","Activates lights and platforms with this tag, using the engine's normal activation rules.",new LuaActionParameter("tag","Tag ID",1,1,32767)),
+            Action("tag_off","Tags","Deactivate tag","Deactivates lights and platforms with this tag, using the engine's normal activation rules.",new LuaActionParameter("tag","Tag ID",1,1,32767)),
+            Action("tag_toggle","Tags","Toggle tag","If any tagged light or platform is active, switches the group off; otherwise switches it on. Does not invert each member separately.",new LuaActionParameter("tag","Tag ID",1,1,32767)),
             Action("platform_on","World","Activate platform / door","The destination polygon must be a platform.",Polygon()),
             Action("platform_off","World","Deactivate platform / door","The destination polygon must be a platform.",Polygon()),
             new PolygonLuaAction{Id="message",Category="Messages",Label="Show message",Description="Print text to the entering player's HUD.",HasText=true,Parameters=Array.Empty<LuaActionParameter>()}
@@ -432,6 +502,8 @@ end
             string ammo="Game.proper_item_accounting = true\nfor _, item in ipairs({2,4,6,7,9,14,16,23,35}) do player.items[item] = 999 end\n";
             string code;
             switch(id) {
+                case "sun_path":case "sun_set":case "sun_fade":case "sunrise":case "sunset":case "sun_on":case "sun_off":case "sun_stop":case "sun_reset":
+                    code=SunCode(id,N);break;
                 case "flag_set":case "flag_if":
                     if(string.IsNullOrWhiteSpace(text))throw new ArgumentException("Enter a flag name.");
                     string flag=Quote(text.Trim());
@@ -480,6 +552,8 @@ end
                 case "lights_dim":case "lights_brighten":
                     code="local change = "+(id=="lights_dim"?"-":"")+N("amount")+" / 100\nfor light in Lights() do\n  for i = 0, #light.states - 1 do\n    local state = light.states[i]\n    state.intensity = math.max(0, math.min(1, state.intensity + change))\n"+(N("seconds")=="0"?"":"    state.light_function = \"smooth\"\n    state.period = math.max(1, math.floor("+N("seconds")+" * 30 + 0.5))\n    state.delta_period = 0\n")+"  end\nend\n";break;
                 case "light_on":case "light_off":code="local light = Lights["+N("light")+"]\nif light then light.active = "+(id=="light_on"?"true":"false")+" else player:print('Light does not exist') end\n";break;
+                case "tag_on":case "tag_off":case "tag_toggle":
+                    code="local tag = Tags["+N("tag")+"]\ntag.active = "+(id=="tag_toggle"?"not tag.active":id=="tag_on"?"true":"false")+"\n";break;
                 case "platform_on":case "platform_off":code="local target = "+Target()+"\nif target and target.platform then target.platform.active = "+(id=="platform_on"?"true":"false")+" else player:print('Destination is not a platform') end\n";break;
                 case "message":code="player:print("+Quote(text)+")\n";break;
                 default:throw new ArgumentException("Unknown Lua action.");

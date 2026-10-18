@@ -63,7 +63,7 @@ class BoxToolTests
     }
     static Editor Editor(Level level) => new Editor {
         Level = level, Grid = new Grid { Visible = false }, Selection = new Selection(), Scale = 1,
-        DefaultSnapDistance = 8, Tool = Tool.Box
+        DefaultSnapDistance = 8, Tool = Tool.Box, BakeWholeMap = false
     };
 
     static void Main(string[] args)
@@ -100,6 +100,492 @@ class BoxToolTests
             W(map+38,10001); W(map+40,65535); // ID, unnamed resource, attribute/data-offset = zero
             return bytes;
         }
+        Test("Optimize selection merges compatible polygons as one undo step",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);Box(level,4096,0,5120,1024);
+            var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1,2});
+            Check(editor.OptimizeSelectedGeometry(out string reason),reason);Validate(level);Check(level.Polygons.Count==2,"Failed to simplify three boxes");Check(editor.Selection.Polygons.Count==1,"Result selection lost");
+            Check(level.GetEnclosingPolygon(P(4500,500))>=0,"Unselected polygon lost");editor.Undo();Validate(level);Check(level.Polygons.Count==4,"Optimization undo failed");editor.Redo();Validate(level);Check(level.Polygons.Count==2,"Optimization redo failed");
+        });
+        Test("Optimize preserves height differences and leaves no-op unchanged",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);level.Polygons[1].FloorHeight=256;
+            var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});string before=CanonicalSnapshot(level);
+            Check(!editor.OptimizeSelectedGeometry(out _),"Merged different heights");Check(CanonicalSnapshot(level)==before,"No-op changed geometry");
+            level.Polygons[1].FloorHeight=0;level.Polygons[1].FloorLight=1;Check(!editor.OptimizeSelectedGeometry(out _),"Merged different lights");
+        });
+        Test("floor lighting projects raised ground shadows with preview undo and save",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=512;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(1024,1,.25,64,1,false,out string reason),reason);
+            Check(CanonicalSnapshot(level)==before,"Preview mutated map");Check(ed.LightingPreview.Any(p=>p.Shadow) && ed.LightingPreview.Any(p=>!p.Shadow),"Missing shadow boundary");
+            Check(ed.BakeSelectedLighting(1024,1,.25,64,1,true,out reason),reason);Validate(level);
+            Check(level.Polygons.Count==4,"Unexpected shadow geometry");
+            short shadow=level.GetEnclosingPolygon(P(2500,512)),bright=level.GetEnclosingPolygon(P(3900,512));
+            Check(level.Lights[level.Polygons[shadow].FloorLight].PrimaryActive.Intensity==.25,"Shadow not dark");
+            Check(level.Lights[level.Polygons[bright].FloorLight].PrimaryActive.Intensity==1,"Lit floor not bright");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Bake undo failed");ed.Redo();Validate(level);Check(level.Polygons.Count==4,"Redo failed");
+        });
+        Test("sun paths declare eight points once before polygon actions",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);
+            string path=PolygonLuaActions.Generate("sun_path");
+            level.Polygons[0].LuaTriggerEnabled=true;level.Polygons[0].LuaTriggerCode=path+path+PolygonLuaActions.Generate("sunrise")+PolygonLuaActions.Generate("sunset");
+            string generated=PolygonLua.Generate(level);
+            Check(generated.Split(new[]{"sun.path = "},StringSplitOptions.None).Length==2,"Path declared repeatedly");
+            Check(generated.IndexOf("sun.path = ")<generated.IndexOf("local actions, once"),"Path declared after actions");
+            string declaration=PolygonLuaActions.SunPathDeclaration(new[]{path});
+            Check(declaration.Split(new[]{"{azimuth="},StringSplitOptions.None).Length==9,"Path does not have exactly eight steps");
+            Check(!PolygonLuaActions.Generate("sunrise").Contains("sun.path ="),"Runtime action redeclares path");
+            Check(PolygonLuaActions.Generate("sunset").Contains("target.path_position = 0"),"Sunset does not reverse path");
+            Check(PolygonLuaActions.SunPathDeclaration(new[]{"player:print('hello')"})=="","Unrelated trigger enabled prebaking");
+            bool conflict=false;try{PolygonLuaActions.SunPathDeclaration(new[]{path,PolygonLuaActions.Generate("sun_path",new System.Collections.Generic.Dictionary<string,double>{{"az0",90}})});}catch(ArgumentException){conflict=true;}
+            Check(conflict,"Conflicting level paths silently overwritten");
+        });
+        Test("sun presets validate duration and survive map trigger serialization",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);
+            level.Polygons[0].LuaTriggerEnabled=true;
+            level.Polygons[0].LuaTriggerCode=PolygonLuaActions.Generate("sunrise",new System.Collections.Generic.Dictionary<string,double>{{"seconds",60},{"start",0},{"end",1}});
+            var loaded=new Level();loaded.Load(level.Save().Clone());
+            Check(loaded.Polygons[0].LuaTriggerCode==level.Polygons[0].LuaTriggerCode,"Sun action lost on load");
+            string runtime=PolygonLua.Generate(loaded);
+            Check(runtime.Contains("apply_sun(Game._forge_ahead_sun)") && runtime.Contains("sun_fade.elapsed + 1"),"Sun transition runtime missing");
+            foreach(double duration in new[]{0,-1,double.NaN,double.PositiveInfinity,36001}) {
+                bool rejected=false;try{PolygonLuaActions.Generate("sunset",new System.Collections.Generic.Dictionary<string,double>{{"seconds",duration}});}catch(ArgumentException){rejected=true;}
+                Check(rejected,"Invalid sun duration accepted");
+            }
+        });
+        Test("oblique room lighting welds rounded seams instead of sampling slivers",()=>{
+            var level=new Level();
+            var rings=new[]{
+                new[]{P(-5603,-2146),P(-3631,-2146),P(-3631,-148),P(-5603,-148)},
+                new[]{P(-14643,-12863),P(-11442,-7759),P(-12581,-6314),P(-17491,-8902)},
+                new[]{P(-12581,-6314),P(-5603,-2146),P(-5603,-148),P(-10065,13829)},
+                new[]{P(-10065,13829),P(-5603,-148),P(-3631,-148)},
+                new[]{P(-12581,-6314),P(-11442,-7759),P(18851,-6991),P(-3631,-2146),P(-5603,-2146)},
+                new[]{P(-3631,-148),P(-3631,-2146),P(18851,-6991)},
+                new[]{P(-10065,13829),P(-3631,-148),P(18851,-6991),P(18851,12542)}
+            };
+            var create=typeof(Level).GetMethod("CreatePlainShape",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+            foreach(var ring in rings){object[] args={ring.ToList(),null};Check((bool)create.Invoke(level,args),(string)args[1]);}
+            foreach(var p in level.Polygons)p.CeilingHeight=3072;level.Polygons[0].FloorHeight=1024;level.Polygons[1].CeilingHeight=920;
+            level.Pave(true,(ShapeDescriptor)125,(ShapeDescriptor)123,(ShapeDescriptor)124);
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(-14200,-8700);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(768,1,.25,256,64,true,out string reason),reason);Validate(level);
+            Check(!reason.Contains("approximate") && level.Polygons.Count<=10,"Detailed bake fragmented: "+reason);
+            Check(level.Polygons[level.GetEnclosingPolygon(P(-4500,-1000))].FloorHeight==1024,"Raised obstacle lost");
+            foreach(var line in level.Lines) {
+                if(line.ClockwisePolygonOwner>=0 && line.CounterclockwisePolygonOwner>=0)
+                    Check((line.Flags & LineFlags.Solid)==0,"Shadow boundary became solid");
+                for(int direction=0;direction<2;direction++) {
+                    short owner=direction==0?line.ClockwisePolygonOwner:line.CounterclockwisePolygonOwner;
+                    short other=direction==0?line.CounterclockwisePolygonOwner:line.ClockwisePolygonOwner;
+                    if(owner<0)continue;
+                    var polygon=level.Polygons[owner];
+                    if(other>=0 && polygon.FloorHeight>=level.Polygons[other].FloorHeight && polygon.CeilingHeight<=level.Polygons[other].CeilingHeight)continue;
+                    short side=direction==0?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+                    Check(side>=0 && level.Sides[side].Primary.Texture.Equals((ShapeDescriptor)125),"Bake lost an exposed wall texture");
+                }
+            }
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Seam repair did not undo");ed.Redo();Validate(level);
+        });
+        Test("ceiling bake samples low-ceiling occlusion independently of floor with undo",()=>{
+            foreach(bool rebuild in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+                foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].CeilingHeight=1536;
+                level.Lights.Add(new Light(.6));short original=(short)(level.Lights.Count-1);
+                foreach(var p in level.Polygons)p.CeilingLight=original;
+                var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);ed.RebuildLightingGeometry=rebuild;
+                string before=CanonicalSnapshot(level);
+                Check(ed.BakeSelectedLighting(512,1,.25,64,1,true,out string reason),reason);Validate(level);
+                short receiver=level.GetEnclosingPolygon(P(3000,512));var surface=level.Polygons[receiver];
+                double intensity=level.Lights[surface.CeilingLight].PrimaryActive.Intensity;
+                Check(intensity>.25 && intensity<1,"Ceiling did not receive partial shadow: "+intensity);
+                Check(level.Lights[surface.FloorLight].PrimaryActive.Intensity==1,"Ceiling shading changed bright floor");
+                Check(level.Polygons[0].CeilingLight==original && level.Polygons[1].CeilingLight==original,"Shaded unselected ceilings");
+                Check(level.Polygons.Count==3,"Ceiling sampling added geometry");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+                Check(loaded.Polygons[receiver].CeilingLight==surface.CeilingLight,"Ceiling light lost on save");
+                ed.Undo();Check(CanonicalSnapshot(level)==before,"Ceiling bake undo failed");ed.Redo();Validate(level);
+                Check(level.Lights[level.Polygons[receiver].CeilingLight].PrimaryActive.Intensity==intensity,"Ceiling bake redo failed");
+            }
+        });
+        Test("floor lighting keeps clear floors whole and blocks light across solid walls",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            var ed=Editor(level);ed.Selection.Polygons.UnionWith(new short[]{0,1});ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.BakeSelectedLighting(1024,.8,.2,16,1,true,out string reason),reason);Validate(level);
+            Check(level.Polygons.Count==2,"Unnecessary splits");
+            Check(Math.Abs(level.Lights[level.Polygons[0].CeilingLight].PrimaryActive.Intensity-.8)<.001,"Clear ceiling shadowed");
+            Check(Math.Abs(level.Lights[level.Polygons[1].CeilingLight].PrimaryActive.Intensity-.2)<.001,"Solid wall leaked ceiling light");
+            Check(Math.Abs(level.Lights[level.Polygons[0].FloorLight].PrimaryActive.Intensity-.8)<.001,"Source room shadowed");
+            Check(Math.Abs(level.Lights[level.Polygons[1].FloorLight].PrimaryActive.Intensity-.2)<.001,"Solid wall leaked light");
+        });
+        Test("lighting reduces detail when adjacent polygon has eight vertices",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            Box(level,2048,-1024,4096,0);
+            for(int x=2048;x<3072;x+=256)Box(level,x,-2048,x+256,-1024);
+            Check(level.Polygons[3].VertexCount==8,"Fixture neighbor must have eight vertices");
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=377;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(513,319);
+            string before=CanonicalSnapshot(level);
+            var exact=new Level();exact.Load(level.Save().Clone());
+            Check(!exact.BakeFloorLighting(new short[]{2},P(513,319),1001,1,.25,128,64,out _,out string rejection,true),"Fixture did not exceed neighbor capacity");
+            Check(rejection.Contains("vertex"),rejection);
+            Check(ed.BakeSelectedLighting(1001,1,.25,128,64,true,out string reason),reason);Validate(level);
+            Check(level.Polygons[3].VertexCount==8,"Changed full neighboring polygon");
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Reduced detail undo failed");
+        });
+        Test("region reconstruction preserves protected shared walls around alternate routes",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,0,1024,1024,2048);Box(level,1024,1024,2048,2048);
+            var wall=level.Lines.First(l=>l.EndpointIndexes.All(i=>level.Endpoints[i].X==1024) && l.EndpointIndexes.Any(i=>level.Endpoints[i].Y==0));wall.Flags|=LineFlags.Solid;
+            var scope=new System.Collections.Generic.HashSet<short>(new short[]{0,1,2,3});
+            Check(level.RebuildLightingRegions(ref scope,out _,out string reason),reason);Validate(level);
+            Check(level.Lines.Any(l=>(l.Flags & LineFlags.Solid)!=0 && l.EndpointIndexes.All(i=>level.Endpoints[i].X==1024) && l.EndpointIndexes.Any(i=>level.Endpoints[i].Y==0)),"Protected wall removed via alternate route");
+        });
+        Test("lighting region reconstruction preserves a hole and removes internal vertices",()=>{
+            var level=new Level();
+            for(int y=0;y<4;y++)for(int x=0;x<4;x++)Box(level,x*1024,y*1024,(x+1)*1024,(y+1)*1024);
+            // The central tile is a protected raised island; surrounding floors form a hole.
+            level.Polygons[5].FloorHeight=512;
+            var scope=new System.Collections.Generic.HashSet<short>(Enumerable.Range(0,16).Where(i=>i!=5).Select(i=>(short)i));
+            Check(level.NormalizeLightingEdgeOrder(out string reason),reason);
+            Check(level.RebuildLightingRegions(ref scope,out int removed,out reason),reason);Validate(level);
+            Check(removed>0,"Did not discard region subdivisions");
+            Check(level.Polygons[level.GetEnclosingPolygon(P(1500,1500))].FloorHeight==512,"Island/hole lost");
+            Check(!level.Endpoints.Contains(P(3072,3072)),"Unused interior grid vertex survived reconstruction");
+            for(int y=128;y<4096;y+=256)for(int x=128;x<4096;x+=256)Check(level.GetEnclosingPolygon(P(x,y))>=0,"Region reconstruction left a gap");
+            var saved=new Level();saved.Load(level.Save().Clone());Validate(saved);
+        });
+        Test("lighting reconstruction retains textured boundary segments and side orientation",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);
+            level.Pave(true,(ShapeDescriptor)125,(ShapeDescriptor)123,(ShapeDescriptor)124);
+            var expected=level.Lines.Where(l=>l.ClockwisePolygonOwner<0 || l.CounterclockwisePolygonOwner<0).Select((l,i)=>{
+                short si=l.ClockwisePolygonSideIndex>=0?l.ClockwisePolygonSideIndex:l.CounterclockwisePolygonSideIndex;
+                level.Sides[si].Primary.Texture=(ShapeDescriptor)(125+i);
+                return new {A=level.Endpoints[l.EndpointIndexes[0]],B=level.Endpoints[l.EndpointIndexes[1]],Texture=level.Sides[si].Primary.Texture};
+            }).ToList();
+            var scope=new System.Collections.Generic.HashSet<short>(new short[]{0,1});
+            var plans=scope.ToDictionary(i=>i,i=>new System.Collections.Generic.List<LightingPiece>{new LightingPiece{
+                Points=level.Polygons[i].EndpointIndexes.Take(level.Polygons[i].VertexCount).Select(v=>level.Endpoints[v]).ToList(),Shadow=false}});
+            Check(level.RebuildLightingRegions(ref scope,out _,out string reason,plans,0,0),reason);Validate(level);
+            Check(level.Polygons.Count==1,"Textured boundary prevented removal of internal shading edge");
+            foreach(var wall in expected) {
+                var line=level.Lines.Single(l=>l.EndpointIndexes.Select(i=>level.Endpoints[i]).Contains(wall.A) && l.EndpointIndexes.Select(i=>level.Endpoints[i]).Contains(wall.B));
+                short si=line.ClockwisePolygonOwner>=0?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+                Check(si>=0 && level.Sides[si].Primary.Texture.Equals(wall.Texture),"Rebuild lost wall texture or assigned it to wrong side");
+            }
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            Check(loaded.Sides.Count==expected.Count,"Wall sides lost on save/load");
+        });
+        Test("lighting rebuild repartitions concave lit regions beyond merge-only simplification",()=>{
+            var level=new Level();
+            for(int y=0;y<5;y++)for(int x=0;x<5;x++)if(!(x==0 && y==1) && !(x==1 && y==4))Box(level,x*256,y*256,(x+1)*256,(y+1)*256);
+            var scope=new System.Collections.Generic.HashSet<short>(Enumerable.Range(0,level.Polygons.Count).Select(i=>(short)i));
+            var plans=scope.ToDictionary(i=>i,i=>new System.Collections.Generic.List<LightingPiece>{new LightingPiece{
+                Points=level.Polygons[i].EndpointIndexes.Take(level.Polygons[i].VertexCount).Select(v=>level.Endpoints[v]).ToList(),Shadow=false}});
+            Check(level.RebuildLightingRegions(ref scope,out _,out string reason,plans,0,0),reason);Validate(level);
+            Check(level.Polygons.Count<=4,"Old lit subdivisions survived boundary reconstruction: "+level.Polygons.Count);
+            for(int y=32;y<1280;y+=64)for(int x=32;x<1280;x+=64) {
+                bool expected=!(x/256==0 && y/256==1) && !(x/256==1 && y/256==4);
+                Check((level.GetEnclosingPolygon(P(x,y))>=0)==expected,"Reconstruction changed concave region coverage");
+            }
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+        });
+        Test("lighting rebuild merges a convex pinwheel that cannot merge pairwise",()=>{
+            var level=new Level();
+            Box(level,1024,1024,2048,2048);Box(level,0,0,2048,1024);
+            Box(level,2048,0,3072,2048);Box(level,1024,2048,3072,3072);Box(level,0,1024,1024,3072);
+            var scope=new System.Collections.Generic.HashSet<short>(Enumerable.Range(0,5).Select(i=>(short)i));
+            var plans=scope.ToDictionary(i=>i,i=>new System.Collections.Generic.List<LightingPiece>{new LightingPiece{
+                Points=level.Polygons[i].EndpointIndexes.Take(level.Polygons[i].VertexCount).Select(v=>level.Endpoints[v]).ToList(),Shadow=false}});
+            Check(level.RebuildLightingRegions(ref scope,out _,out string reason,plans,0,0),reason);Validate(level);
+            Check(level.Polygons.Count==1 && level.Polygons[0].VertexCount==4,"Flat pinwheel did not become one rectangle");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+        });
+        Test("lighting plans reconstruct regions with multiple separated and touching holes",()=>{
+            foreach(var holes in new[]{new[]{7,14,21,28},new[]{7,9,19,21}}) {
+                var level=new Level();
+                for(int y=0;y<6;y++)for(int x=0;x<6;x++)Box(level,x*512,y*512,(x+1)*512,(y+1)*512);
+                foreach(int id in holes)level.Polygons[id].FloorHeight=512;
+                var scope=new System.Collections.Generic.HashSet<short>(Enumerable.Range(0,36).Select(i=>(short)i));
+                var plans=scope.ToDictionary(i=>i,i=>new System.Collections.Generic.List<LightingPiece>{new LightingPiece{
+                    Points=level.Polygons[i].EndpointIndexes.Take(level.Polygons[i].VertexCount).Select(v=>level.Endpoints[v]).ToList(),Shadow=false}});
+                Check(level.RebuildLightingRegions(ref scope,out int removed,out string reason,plans,0,0),reason);Validate(level);
+                Check(removed>0 && level.Polygons.Count<36,"Original grid subdivisions retained");
+                for(int y=64;y<3072;y+=128)for(int x=64;x<3072;x+=128) {
+                    short id=level.GetEnclosingPolygon(P(x,y));Check(id>=0,"Reconstruction left a gap");
+                    Check(level.Polygons[id].FloorHeight==(holes.Contains((y/512)*6+x/512)?512:0),"Raised island boundary changed");
+                }
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            }
+        });
+        Test("lighting rebuild handles concave region with more than eight boundary vertices",()=>{
+            var level=new Level();
+            for(int x=0;x<5;x++)Box(level,x*1024,0,(x+1)*1024,1024);
+            for(int x=0;x<5;x+=2)Box(level,x*1024,1024,(x+1)*1024,2048);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            var scope=new System.Collections.Generic.HashSet<short>(Enumerable.Range(0,level.Polygons.Count).Select(i=>(short)i));
+            Check(level.RebuildLightingRegions(ref scope,out int removed,out string reason),reason);Validate(level);
+            Check(removed>0 && level.GetEnclosingPolygon(P(1500,1500))<0,"Concave notch filled");
+            Check(level.GetEnclosingPolygon(P(2500,1500))>=0,"Region lobe lost");
+        });
+        Test("rebuild discards previous floor-light boundaries before new shading",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            level.Lights.Add(new Light(.25));level.Polygons[1].FloorLight=(short)(level.Lights.Count-1);
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out string reason),reason);
+            Check(level.Polygons.Count==1,"Old shading preserved unnecessary floor divisions: "+reason);Validate(level);
+            Check(level.Lights[level.Polygons[0].FloorLight].PrimaryActive.Intensity==1,"Old shadow remained");
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Discarded floor divisions did not undo");
+        });
+        Test("floor-light rebuild compatibility preserves ceiling and texture boundaries",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);
+            level.Lights.Add(new Light(.25));level.Polygons[1].FloorLight=(short)(level.Lights.Count-1);
+            Check(!level.CanOptimizePair(0,1) && level.CanOptimizePair(0,1,true),"Lighting-specific compatibility leaked into optimize");
+            level.Polygons[1].CeilingLight=(short)(level.Lights.Count-1);Check(level.CanOptimizePair(0,1,true),"Old ceiling lighting blocked lighting reconstruction");
+            level.Polygons[1].CeilingHeight+=256;Check(!level.CanOptimizePair(0,1,true),"Ceiling boundary ignored");
+            level.Polygons[1].CeilingHeight=level.Polygons[0].CeilingHeight;
+            level.Polygons[1].FloorTexture=new ShapeDescriptor((ushort)123);Check(!level.CanOptimizePair(0,1,true),"Texture boundary ignored");
+        });
+        Test("moving light replaces old bake and recalculates lit regions",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=512;
+            var original=level.Save().Clone();
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.BakeSelectedLighting(1024,1,.25,128,1,true,out string reason),reason);string first=CanonicalSnapshot(level);
+            ed.BakeLightPosition=P(3900,512);
+            Check(ed.BakeSelectedLighting(1024,1,.25,128,1,true,out reason),reason);Validate(level);
+            Check(reason.Contains("Replaced the previous bake"),"Did not reuse original geometry");
+            var fresh=new Level();fresh.Load(original);var other=Editor(fresh);other.BakeWholeMap=true;other.RebuildLightingGeometry=true;other.HasBakeLight=true;other.BakeLightPosition=P(3900,512);
+            Check(other.BakeSelectedLighting(1024,1,.25,128,1,true,out reason),reason);
+            Check(CanonicalSnapshot(fresh)==CanonicalSnapshot(level),"Rebake differs from a fresh bake at the moved position");
+            ed.Undo();Check(CanonicalSnapshot(level)==first,"Rebake undo did not restore previous bake");
+        });
+        Test("rebake preserves edits made after earlier lighting",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);level.Polygons[0].CeilingHeight=2048;
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out string reason),reason);
+            level.Polygons[0].CeilingHeight=3072;
+            Check(ed.BakeSelectedLighting(768,.8,.2,64,1,true,out reason),reason);
+            Check(level.Polygons[0].CeilingHeight==3072 && !reason.Contains("Replaced the previous bake"),"Rebake discarded intervening edits");
+        });
+        Test("rebuild does not silently use coarse sampling when exact bake fails",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=512;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(!ed.BakeSelectedLighting(1024,1,.25,1,1,true,out string reason),"Rebuild silently used coarse fallback");
+            Check(reason.Contains("coarse sampling") && CanonicalSnapshot(level)==before,"Missing explanation or failed rebuild changed map");
+            ed.AllowCoarseRebuild=true;Check(ed.BakeSelectedLighting(1024,1,.25,1,1,true,out reason),reason);
+        });
+        Test("lighting normalizes outgoing imported edge order before splitting",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons){p.CeilingHeight=2048;var lines=(short[])p.LineIndexes.Clone();var sides=(short[])p.SideIndexes.Clone();var adjacent=(short[])p.AdjacentPolygonIndexes.Clone();
+                for(int i=0;i<p.VertexCount;i++){int next=(i+1)%p.VertexCount;p.LineIndexes[i]=lines[next];p.SideIndexes[i]=sides[next];p.AdjacentPolygonIndexes[i]=adjacent[next];}}
+            level.Polygons[1].FloorHeight=512;
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(1024,1,.25,64,1,true,out string reason),reason);
+            Validate(level);Check(level.Polygons.Count>3,"Outgoing edge order forced no-geometry fallback");
+            var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Normalization/bake undo lost original");
+        });
+        Test("lighting rebuild removes original divisions and undoes atomically",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out string reason),reason);Validate(level);
+            Check(level.Polygons.Count==1,"Original internal boundaries retained: "+reason);
+            Check(ed.SelectedLuaPolygons().SequenceEqual(new short[]{0}),"Rebuild selection indexes wrong");
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Rebuild bake undo failed");ed.Redo();Validate(level);Check(level.Polygons.Count==1,"Rebuild redo failed");
+        });
+        Test("lighting rebuild preserves height boundaries and skips script ID renumbering",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=256;
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.RebuildLightingGeometry=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out string reason),reason);Validate(level);
+            Check(level.Polygons.Any(p=>p.FloorHeight==0) && level.Polygons.Any(p=>p.FloorHeight==256),"Height boundary lost");ed.Undo();
+            level.Polygons[1].FloorHeight=0;level.Polygons[1].LuaTriggerCode="player:print('test')";
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out reason),reason);
+            Check(reason.Contains("rebuilding skipped") && level.Polygons.Count==2,"Script IDs not protected");
+            Check(level.Polygons[1].LuaTriggerCode.Contains("test"),"Script moved or lost");
+        });
+        Test("approximate lighting merges uniform sample triangles into convex floors",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            Check(level.BakeFloorLighting(new short[]{0,1},P(512,512),768,1,.25,128,1,out var pieces,out string reason,true),reason);
+            Validate(level);
+            Check(pieces.Count==2 && level.Polygons.Count==2,"Uniform floors kept sampling subdivisions");
+            Check(pieces.All(p=>p.Points.Count==4),"Uniform boxes became triangles");
+            Check(pieces.Count(p=>p.Shadow)==1 && pieces.Count(p=>!p.Shadow)==1,"Simplification changed shading");
+        });
+        Test("whole map lighting works without a selection",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;
+            var ed=Editor(level);ed.BakeWholeMap=true;ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.SelectedLuaPolygons().Length==0,"Unexpected selection");
+            Check(ed.BakeSelectedLighting(768,.8,.2,64,1,false,out string reason),reason);
+            Check(ed.LightingPreview.Count(p=>!p.Shadow)==2,"Preview did not cover whole map");
+            Check(ed.BakeSelectedLighting(768,.8,.2,64,1,true,out reason),reason);Validate(level);
+            foreach(var p in level.Polygons)Check(Math.Abs(level.Lights[p.FloorLight].PrimaryActive.Intensity-.8)<.001,"Unselected floor not lit");
+        });
+        Test("lighting retries small budgets and reports simplified result",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=512;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(1024,1,.25,1,1,true,out string reason),reason);
+            Check(reason.Contains("Simplified") && reason.Contains("Fallback reason:") && reason.Contains("0 added"),"Missing fallback explanation: "+reason);
+            Check(!reason.Contains("cannot be represented") && !reason.Contains("could not be built:"),"Successful fallback presented an exact-attempt failure");
+            Check(level.Polygons.Count==3,"Budget exceeded");Validate(level);ed.Undo();Check(CanonicalSnapshot(level)==before,"Fallback undo failed");
+            ed.Selection.Polygons.UnionWith(new short[]{0,1,2});
+            Check(!ed.BakeSelectedLighting(1024,1,.25,1,1,true,out reason),"Impossible budget accepted");
+            Check(reason.Contains("Increase it to at least 3"),"Missing actionable budget error");
+        });
+        Test("baked lighting shades far walls behind raised ground",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=1536;
+            level.Pave();
+            var far=level.Sides.First(s=>s.PolygonIndex==2 && level.Lines[s.LineIndex].EndpointIndexes.All(i=>level.Endpoints[i].X==3072));
+            var texture=far.Primary.Texture;short originalLight=far.PrimaryLightsourceIndex;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out string reason),reason);Validate(level);
+            far=level.Sides.First(s=>s.PolygonIndex==2 && level.Lines[s.LineIndex].EndpointIndexes.All(i=>level.Endpoints[i].X==3072));
+            Check(level.Lights[far.PrimaryLightsourceIndex].PrimaryActive.Intensity==.25,"Far wall not shadowed");
+            Check(far.Primary.Texture.Equals(texture),"Bake replaced wall texture");
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Wall lighting undo failed");
+            level.Polygons[1].FloorHeight=0;
+            Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out reason),reason);
+            far=level.Sides.First(s=>s.PolygonIndex==2 && level.Lines[s.LineIndex].EndpointIndexes.All(i=>level.Endpoints[i].X==3072));
+            Check(level.Lights[far.PrimaryLightsourceIndex].PrimaryActive.Intensity==1,"Unblocked far wall not lit");
+        });
+        Test("wall bake detects shadows below a lit wall center",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=4096;level.Polygons[1].FloorHeight=768;level.Pave();
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+            Check(ed.BakeSelectedLighting(1024,1,.25,64,1,true,out string reason),reason);Validate(level);
+            var far=level.Sides.First(s=>s.PolygonIndex==2 && level.Lines[s.LineIndex].EndpointIndexes.All(i=>level.Endpoints[i].X==3072));
+            double intensity=level.Lights[far.PrimaryLightsourceIndex].PrimaryActive.Intensity;
+            Check(intensity<1 && intensity>.25,"Partial far-wall shadow was lost or flattened to full darkness");
+            var loaded=new Level();loaded.Load(level.Save().Clone());
+            var saved=loaded.Sides.First(s=>s.PolygonIndex==2 && loaded.Lines[s.LineIndex].EndpointIndexes.All(i=>loaded.Endpoints[i].X==3072));
+            Check(Math.Abs(loaded.Lights[saved.PrimaryLightsourceIndex].PrimaryActive.Intensity-intensity)<.001,"Wall shade lost on save/load");
+        });
+        Test("floor lighting accepts selected floors at and above the light",()=>{
+            foreach(short raised in new short[]{768,1200}) {
+                var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,3072,1024);
+                foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=raised;
+                var ed=Editor(level);ed.Selection.Polygons.UnionWith(new short[]{0,1,2});ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);
+                string before=CanonicalSnapshot(level);
+                Check(ed.BakeSelectedLighting(768,1,.25,64,1,false,out string reason),reason);
+                Check(ed.LightingPreview.Any(p=>p.Shadow),"Raised floor not shadowed in preview");
+                Check(CanonicalSnapshot(level)==before,"Preview changed map");
+                Check(ed.BakeSelectedLighting(768,1,.25,64,1,true,out reason),reason);Validate(level);
+                Check(level.Lights[level.Polygons[0].FloorLight].PrimaryActive.Intensity==1,"Lower source floor not lit");
+                Check(level.Lights[level.Polygons[1].FloorLight].PrimaryActive.Intensity==.25,"Raised top lit from below");
+                Check(level.Lights[level.Polygons[2].FloorLight].PrimaryActive.Intensity==.25,"Raised floor did not block light");
+                ed.Undo();Check(CanonicalSnapshot(level)==before,"Height case undo failed");
+            }
+        });
+        Test("live shadow preview ignores polygon budget and shared-edge limits",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);Box(level,2048,-1024,4096,0);
+            for(int x=2048;x<3072;x+=256)Box(level,x,-2048,x+256,-1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=377;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.Tool=Tool.BakeLighting;ed.BakePreviewHeight=1001;
+            string before=CanonicalSnapshot(level);
+            ed.ButtonPress(513,319,EditorModifiers.None);
+            Check(ed.LightingPreview.Any(p=>p.Shadow),"Live preview omitted shadows");
+            string first=string.Join(";",ed.LightingPreview.SelectMany(p=>p.Points).Select(p=>$"{p.X},{p.Y}"));
+            ed.Motion(700,600,EditorModifiers.None);
+            Check(first!=string.Join(";",ed.LightingPreview.SelectMany(p=>p.Points).Select(p=>$"{p.X},{p.Y}")),"Drag did not update shadow masks");
+            ed.ButtonRelease(700,600,EditorModifiers.None);
+            Check(ed.BakeSelectedLighting(1001,1,.25,1,65536,false,out string reason),reason);
+            Check(ed.LightingPreview.Any(p=>p.Shadow),"Bake limits affected display preview");
+            Check(CanonicalSnapshot(level)==before,"Live preview mutated map");
+        });
+        Test("lighting tool placement keeps selected geometry unchanged",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);var ed=Editor(level);ed.Selection.Polygons.Add(0);
+            string before=CanonicalSnapshot(level);ed.Tool=Tool.BakeLighting;
+            ed.ButtonPress(256,256,EditorModifiers.None);ed.Motion(512,512,EditorModifiers.None);ed.ButtonRelease(512,512,EditorModifiers.None);
+            Check(ed.HasBakeLight && ed.BakeLightPosition.Equals(P(512,512)),"Light placement failed");
+            Check(ed.SelectedLuaPolygons().SequenceEqual(new short[]{0}),"Placement lost selection");
+            Check(CanonicalSnapshot(level)==before,"Placement moved geometry");
+            ed.Tool=Tool.Select;Check(ed.HasBakeLight,"Tool change lost light");
+        });
+        Test("approximate floor shadows accept fractional projected intersections",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=377;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(513,319);
+            string before=CanonicalSnapshot(level);
+            Check(ed.BakeSelectedLighting(1001,1,.25,128,64,false,out string reason),reason);
+            Check(CanonicalSnapshot(level)==before,"Approximate preview mutated map");
+            Check(ed.BakeSelectedLighting(1001,1,.25,128,64,true,out reason),reason);Validate(level);
+            for(int x=2050;x<4096;x+=37)for(int y=2;y<1024;y+=37)Check(level.GetEnclosingPolygon(P(x,y))>=0,"Approximation left floor holes");
+            ed.Undo();Check(CanonicalSnapshot(level)==before,"Approximate bake undo failed");
+            var trial=new Level();trial.Load(level.Save().Clone());
+            Check(trial.BakeFloorLighting(new short[]{2},P(513,319),1001,1,.25,128,64,out var preview,out reason,true),reason);Validate(trial);
+            Check(preview.Any(p=>p.Shadow) && preview.Any(p=>!p.Shadow),"Approximation lost shadow contrast");
+        });
+        Test("floor lighting rejects invalid source and budget atomically",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);Box(level,2048,0,4096,1024);
+            foreach(var p in level.Polygons)p.CeilingHeight=2048;level.Polygons[1].FloorHeight=512;
+            var ed=Editor(level);ed.Selection.Polygons.Add(2);ed.HasBakeLight=true;ed.BakeLightPosition=P(512,512);string before=CanonicalSnapshot(level);
+            Check(!ed.BakeSelectedLighting(1024,1,.25,0,1,true,out _),"Invalid budget ignored");
+            Check(!ed.BakeSelectedLighting(0,1,.25,64,1,true,out _),"Source on floor accepted");
+            Check(CanonicalSnapshot(level)==before,"Failed bake mutated map");
+        });
+        Test("Pathfinder diagonal overlap in both directions",()=>{
+            foreach(bool subtract in new[]{false,true})foreach(bool reverse in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,2048,2048);
+                Check(level.CreateCirclePolygon(new System.Collections.Generic.List<Point>{P(4096,100),P(5200,1200),P(4100,2300),P(3000,1100)},out string error),error);
+                foreach(short v in level.Polygons[1].EndpointIndexes.Take(4).ToArray()){var p=level.Endpoints[v];level.Endpoints[v]=P(p.X-2500,p.Y);}
+                var ed=Editor(level);ed.Selection.Polygons.UnionWith(new short[]{0,1});Check(ed.PathfinderSelection(subtract,reverse,out error),$"subtract={subtract} reverse={reverse}: {error}");Validate(level);
+            }
+        });
+        Test("Saved selection round trip and resource import",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,2048,0,3072,1024);
+            level.Lights[0].PrimaryActive.Intensity=0.123;
+            var editor=Editor(level);editor.Selection.Polygon=0;
+            string path=System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid()+".sceA");
+            try {
+                Check(editor.SaveSelectionFile(path,out string reason),reason);
+                var saved=new Wadfile();saved.Load(path);var contents=new Level();contents.Load(saved.Directory[0]);Check(contents.Polygons.Count==1,"Saved unselected geometry");
+                var destination=new Level();var other=Editor(destination);Check(other.LoadSelectionFile(path,out reason),reason);Check(other.Pasting,"Missing paste preview");
+                Check(other.PasteSelection(4096,4096,out reason),reason);Validate(destination);Check(destination.Polygons.Count==1,"Wrong paste count");Check(Math.Abs(destination.Lights[destination.Polygons[0].FloorLight].PrimaryActive.Intensity-0.123)<0.0001,"Light settings not imported");other.Undo();Check(destination.Polygons.Count==0,"Import not undoable");
+            }finally{if(System.IO.File.Exists(path))System.IO.File.Delete(path);}
+        });
+        Test("Pathfinder joins adjacent polygons and undoes",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,1024,0,2048,1024);
+            var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            Check(editor.PathfinderSelection(false,false,out string reason),reason);Validate(level);Check(level.Polygons.Count==1,"Did not merge");editor.Undo();Validate(level);Check(level.Polygons.Count==2,"Union undo failed");
+        });
+        Test("Pathfinder overlap union and enclosed difference",()=>{
+            foreach(bool subtract in new[]{false,true}) {
+                var level=new Level();Box(level,0,0,2048,2048);Box(level,3072,512,4096,1536);
+                var cutter=level.Polygons[1];foreach(short v in cutter.EndpointIndexes.Take(cutter.VertexCount).ToArray()){var point=level.Endpoints[v];level.Endpoints[v]=P(point.X-2560,point.Y);}
+                var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});
+                Check(editor.PathfinderSelection(subtract,false,out string reason),reason);Validate(level);
+                Check((level.GetEnclosingPolygon(P(1024,1024))<0)==subtract,"Wrong boolean coverage");Check(level.GetEnclosingPolygon(P(256,256))>=0,"Outer coverage lost");
+                var loaded=new Level();loaded.Load(level.Save().Clone());Validate(loaded);
+            }
+        });
+        Test("Pathfinder failed operation is atomic",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,2048,0,3072,1024);var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            string before=CanonicalSnapshot(level);Check(!editor.PathfinderSelection(true,false,out string reason),"Non-overlap subtraction accepted");Check(CanonicalSnapshot(level)==before,"Failed boolean changed map");
+        });
+        Test("Pathfinder subtracts overlapping cutter",()=>{
+            var level=new Level();Box(level,0,0,1024,1024);Box(level,2048,256,3072,768);
+            var cutter=level.Polygons[1];foreach(short v in cutter.EndpointIndexes.Take(cutter.VertexCount).ToArray()){var point=level.Endpoints[v];level.Endpoints[v]=P(point.X-1536,point.Y);}
+            var editor=Editor(level);editor.Selection.Polygons.UnionWith(new short[]{0,1});
+            Check(editor.PathfinderSelection(true,false,out string reason),reason);Validate(level);Check(level.GetEnclosingPolygon(P(768,512))==-1,"Cutout remains filled");Check(level.GetEnclosingPolygon(P(256,512))>=0,"Target lost");
+        });
         Test("line tool cuts edge to edge and vertex to vertex with undo", () => {
             foreach(bool diagonal in new[]{false,true}) {
                 var level=new Level();Box(level,0,0,1000,1000);var editor=Editor(level);editor.Tool=Tool.Line;editor.LineSplitAll=true;

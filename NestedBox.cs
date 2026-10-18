@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Weland
 {
@@ -8,6 +9,108 @@ namespace Weland
     {
         public short LastCreatedBoxPolygonIndex { get; private set; } = -1;
 
+        public bool CanOptimizePair(short a,short b,bool ignoreFloorLight=false,bool requireConvexUnion=true)
+        {
+            if(a<0 || b<0 || a==b)return false;
+            var first=Polygons[a];var second=Polygons[b];
+            if(first.Type!=PolygonType.Normal || second.Type!=PolygonType.Normal || first.Permutation!=second.Permutation ||
+               !string.IsNullOrWhiteSpace(first.LuaTriggerCode) || !string.IsNullOrWhiteSpace(second.LuaTriggerCode))return false;
+            byte[] Settings(Polygon source){var copy=new Polygon();CopyBoxSettings(source,copy);if(ignoreFloorLight){copy.FloorLight=0;copy.CeilingLight=0;}using(var stream=new MemoryStream()){copy.Save(new BinaryWriterBE(stream));return stream.ToArray();}}
+            if(!Settings(first).SequenceEqual(Settings(second)))return false;
+            foreach(var line in Lines.Where(l=>(l.ClockwisePolygonOwner==a && l.CounterclockwisePolygonOwner==b) || (l.ClockwisePolygonOwner==b && l.CounterclockwisePolygonOwner==a))) {
+                if(!requireConvexUnion && (line.Flags & (LineFlags.Solid | LineFlags.Landscape | LineFlags.Decorative))!=0)return false;
+                foreach(short sideIndex in new[]{line.ClockwisePolygonSideIndex,line.CounterclockwisePolygonSideIndex})
+                    if(sideIndex>=0 && (Sides[sideIndex].IsControlPanel || !Sides[sideIndex].Transparent.Texture.IsEmpty()))return false;
+            }
+            if(!requireConvexUnion)return true;
+            var rings=new List<List<Point>>{first.EndpointIndexes.Take(first.VertexCount).Select(v=>Endpoints[v]).ToList(),second.EndpointIndexes.Take(second.VertexCount).Select(v=>Endpoints[v]).ToList()};
+            MergeInsetPieces(rings);return rings.Count==1;
+        }
+        public bool Pathfinder(short a,short b,bool subtract,out string reason)
+        {
+            reason=null;
+            if(a==b || a<0 || b<0 || a>=Polygons.Count || b>=Polygons.Count){reason="Select exactly two polygons.";return false;}
+            var settings=Polygons[a];
+            if(settings.Type!=PolygonType.Normal || Polygons[b].Type!=PolygonType.Normal){reason="Pathfinder currently requires two normal polygons.";return false;}
+            if(!string.IsNullOrWhiteSpace(settings.LuaTriggerCode) || !string.IsNullOrWhiteSpace(Polygons[b].LuaTriggerCode)) {reason="Remove polygon Lua triggers before Pathfinder so actions are not lost or duplicated.";return false;}
+            if(Polygons.Any(p=>(p.Type==PolygonType.Teleporter || p.Type==PolygonType.PlatformOnTrigger || p.Type==PolygonType.PlatformOffTrigger) && (p.Permutation==a || p.Permutation==b)) ||
+               Sides.Any(s=>s.IsControlPanel && s.IsPlatformSwitch() && (s.ControlPanelPermutation==a || s.ControlPanelPermutation==b))) {reason="A switch or teleporter references one of these polygons. Update that reference before Pathfinder.";return false;}
+            var left=new List<Point>();var right=new List<Point>();
+            for(int i=0;i<settings.VertexCount;i++)left.Add(Endpoints[settings.EndpointIndexes[i]]);
+            for(int i=0;i<Polygons[b].VertexCount;i++)right.Add(Endpoints[Polygons[b].EndpointIndexes[i]]);
+            long Area(List<Point> ring){long sum=0;for(int i=0;i<ring.Count;i++){var p=ring[i];var q=ring[(i+1)%ring.Count];sum+=(long)p.X*q.Y-(long)p.Y*q.X;}return sum;}
+            if(Area(left)<0)left.Reverse();if(Area(right)<0)right.Reverse();
+            List<Point> Clip(List<Point> ring,Point u,Point v,bool inside) {
+                var result=new List<Point>();
+                for(int i=0;i<ring.Count;i++){
+                    Point p=ring[i],q=ring[(i+1)%ring.Count];long cp=ShapeCross(u,v,p),cq=ShapeCross(u,v,q);
+                    bool pin=inside?cp>=0:cp<=0,qin=inside?cq>=0:cq<=0;
+                    if(pin && (result.Count==0 || !result[result.Count-1].Equals(p)))result.Add(p);
+                    if(pin!=qin){double t=(double)cp/(cp-cq);var cut=new Point((short)Math.Round(p.X+t*(q.X-p.X)),(short)Math.Round(p.Y+t*(q.Y-p.Y)));if(result.Count==0 || !result[result.Count-1].Equals(cut))result.Add(cut);}
+                }
+                if(result.Count>1 && result[0].Equals(result[result.Count-1]))result.RemoveAt(result.Count-1);
+                return result;
+            }
+            var pieces=new List<List<Point>>();var rest=left;
+            for(int i=0;i<right.Count && rest.Count>=3;i++){
+                var outside=Clip(rest,right[i],right[(i+1)%right.Count],false);
+                if(outside.Count>=3 && Area(outside)>0)pieces.Add(outside);
+                rest=Clip(rest,right[i],right[(i+1)%right.Count],true);
+            }
+            if(subtract && (rest.Count<3 || Area(rest)==0)){reason="These polygons have no overlapping area to subtract.";return false;}
+            if(!subtract)pieces.Add(right);
+            if(pieces.Count==0){reason="The cutter removes the entire target polygon.";return false;}
+            // Quantized intersections must be inserted on BOTH sides of a shared
+            // edge, including the untouched cutter in a union. Otherwise its
+            // straight edge cuts across a rounded intersection in another piece.
+            var junctions=pieces.SelectMany(p=>p).Distinct().ToList();
+            var conforming=new List<List<Point>>();
+            foreach(var piece in pieces) {
+                var ring=new List<Point>();
+                for(int edge=0;edge<piece.Count;edge++) {
+                    var p=piece[edge];var q=piece[(edge+1)%piece.Count];
+                    double dx=q.X-p.X,dy=q.Y-p.Y,length2=dx*dx+dy*dy;
+                    ring.Add(p);
+                    if(length2==0)continue;
+                    var between=junctions.Where(v=>!v.Equals(p) && !v.Equals(q))
+                        .Select(v=>new {v,t=((v.X-p.X)*dx+(v.Y-p.Y)*dy)/length2,cross=dx*(v.Y-p.Y)-dy*(v.X-p.X)})
+                        .Where(v=>v.t>0 && v.t<1 && v.cross*v.cross<=length2*2.25).OrderBy(v=>v.t);
+                    foreach(var v in between)if(!ring[ring.Count-1].Equals(v.v))ring.Add(v.v);
+                }
+                if(!TriangulateInsetRing(ring,conforming)){reason="The intersection is too narrow at map-coordinate precision.";return false;}
+            }
+            pieces=conforming;
+            MergeInsetPieces(pieces);
+            var final=new List<List<Point>>();
+            foreach(var piece in pieces) {if(piece.Count<=Polygon.MaxVertexCount)final.Add(piece);else for(int i=1;i<piece.Count-1;i++)final.Add(new List<Point>{piece[0],piece[i],piece[i+1]});}
+            var walls=new List<BoxWall>();var touched=new HashSet<Line>();
+            foreach(var line in Lines){bool cw=line.ClockwisePolygonOwner==a || line.ClockwisePolygonOwner==b;bool ccw=line.CounterclockwisePolygonOwner==a || line.CounterclockwisePolygonOwner==b;if(!cw && !ccw)continue;touched.Add(line);
+                foreach(bool clockwise in new[]{true,false}){if(clockwise?!cw:!ccw)continue;short side=clockwise?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex;
+                    var wall=new BoxWall{Start=Endpoints[line.EndpointIndexes[0]],End=Endpoints[line.EndpointIndexes[1]],Clockwise=clockwise,Flags=line.Flags};
+                    if(side>=0){using(var stream=new MemoryStream()){Sides[side].Save(new BinaryWriterBE(stream));wall.Side=stream.ToArray();}}walls.Add(wall);}}
+            var objects=Objects.FindAll(o=>o.PolygonIndex==a || o.PolygonIndex==b);
+            var notes=Annotations.FindAll(o=>o.PolygonIndex==a || o.PolygonIndex==b);
+            DeletePolygon(Math.Max(a,b));DeletePolygon(Math.Min(a,b));
+            for(int i=Lines.Count-1;i>=0;i--)if(touched.Contains(Lines[i]) && Lines[i].ClockwisePolygonOwner<0 && Lines[i].CounterclockwisePolygonOwner<0)DeleteLineIndex((short)i);
+            var oldPoints=new HashSet<Point>(left.Concat(right));
+            for(int i=Endpoints.Count-1;i>=0;i--)if(oldPoints.Contains(Endpoints[i]) && !Lines.Any(l=>l.EndpointIndexes.Contains((short)i)))DeletePoint((short)i);
+            int first=Polygons.Count;
+            foreach(var piece in final){if(!CreatePlainShape(piece,out reason))return false;CopyBoxSettings(settings,Polygons[Polygons.Count-1]);}
+            foreach(var wall in walls)if(wall.Side!=null)for(int i=0;i<Lines.Count;i++){
+                var line=Lines[i];short owner=wall.Clockwise?line.ClockwisePolygonOwner:line.CounterclockwisePolygonOwner;
+                if(owner<first || !OnSegment(Endpoints[line.EndpointIndexes[0]],wall.Start,wall.End) || !OnSegment(Endpoints[line.EndpointIndexes[1]],wall.Start,wall.End))continue;
+                if((wall.Clockwise?line.ClockwisePolygonSideIndex:line.CounterclockwisePolygonSideIndex)>=0)continue;
+                var side=new Side();side.Load(new BinaryReaderBE(new MemoryStream(wall.Side)));side.LineIndex=(short)i;side.PolygonIndex=owner;
+                short offset=(short)Distance(wall.Start,Endpoints[line.EndpointIndexes[0]]);side.Primary.X+=offset;side.Secondary.X+=offset;side.Transparent.X+=offset;
+                if(wall.Clockwise)line.ClockwisePolygonSideIndex=(short)Sides.Count;else line.CounterclockwisePolygonSideIndex=(short)Sides.Count;Sides.Add(side);
+            }
+            foreach(var obj in objects){short owner=GetEnclosingPolygon(new Point(obj.X,obj.Y));if(owner>=first){obj.PolygonIndex=owner;Objects.Add(obj);}}
+            foreach(var note in notes){short owner=GetEnclosingPolygon(new Point(note.X,note.Y));if(owner>=first){note.PolygonIndex=owner;Annotations.Add(note);}}
+            LastCreatedBoxPolygonIndex=(short)first;
+            // Refresh derived owner/side links through the existing topology validator.
+            var original=new Level();original.Load(Save().Clone());
+            return RepairReflection(original,new HashSet<short>(System.Linq.Enumerable.Range(0,Endpoints.Count).Select(i=>(short)i)),out reason);
+        }
         bool RectangleBounds(Polygon polygon, out Point min, out Point max)
         {
             min = new Point(short.MaxValue, short.MaxValue);
@@ -285,7 +388,7 @@ namespace Weland
         // A union of adjacent pieces is convex exactly when its convex hull
         // has the same area. Plan these merges before creating any map lines,
         // so the triangulation diagonals never become stray geometry.
-        void MergeInsetPieces(List<List<Point>> pieces)
+        void MergeInsetPieces(List<List<Point>> pieces, bool discardUnusedPoints=false, IEnumerable<Point> boundaryPoints=null, bool mergeClusters=false)
         {
             long Area(List<Point> ring)
             {
@@ -332,6 +435,14 @@ namespace Weland
                     {
                         List<Point> hull = Hull(pieces[i], pieces[j]);
                         if (hull.Count > Polygon.MaxVertexCount || Area(hull) != Area(pieces[i]) + Area(pieces[j])) continue;
+                        // For generated lighting geometry, removed internal corners
+                        // need not consume slots on the merged polygon's boundary.
+                        if(discardUnusedPoints) {
+                            allPoints=new HashSet<Point>(Endpoints);
+                            if(boundaryPoints!=null)allPoints.UnionWith(boundaryPoints);
+                            for(int k=0;k<pieces.Count;k++)if(k!=i && k!=j)allPoints.UnionWith(pieces[k]);
+                            allPoints.UnionWith(hull);
+                        }
                         int vertices = 0;
                         for (int e = 0; e < hull.Count; ++e)
                             foreach (Point p in allPoints)
@@ -344,7 +455,36 @@ namespace Weland
                                 shared = Math.Max(shared, ((long)p.X - q.X) * (p.X - q.X) + ((long)p.Y - q.Y) * (p.Y - q.Y));
                         if (shared > bestEdge) { bestA = i; bestB = j; bestHull = hull; bestEdge = shared; }
                     }
-                if (bestA == -1) return;
+                if (bestA == -1) {
+                    if(!mergeClusters || pieces.Count<3)return;
+                    // A convex region can be tiled so that no pair has a convex
+                    // union (a pinwheel is one example). Try exact multi-piece
+                    // unions before accepting that local minimum.
+                    var clusters=new List<List<int>>{Enumerable.Range(0,pieces.Count).ToList()};
+                    foreach(var seed in pieces) {
+                        var vertices=new HashSet<Point>(seed);
+                        clusters.Add(Enumerable.Range(0,pieces.Count).Where(k=>pieces[k].Any(vertices.Contains)).ToList());
+                    }
+                    bool merged=false;
+                    foreach(var cluster in clusters.OrderByDescending(c=>c.Count)) {
+                        if(cluster.Count<3)continue;
+                        var hull=Hull(cluster.SelectMany(k=>pieces[k]).ToList(),new List<Point>());
+                        if(hull.Count>Polygon.MaxVertexCount || Area(hull)!=cluster.Sum(k=>Area(pieces[k])))continue;
+                        var required=new HashSet<Point>(Endpoints);
+                        if(boundaryPoints!=null)required.UnionWith(boundaryPoints);
+                        var members=new HashSet<int>(cluster);
+                        for(int k=0;k<pieces.Count;k++)if(!members.Contains(k))required.UnionWith(pieces[k]);
+                        required.UnionWith(hull);
+                        int count=0;
+                        for(int e=0;e<hull.Count;e++)foreach(var point in required)
+                            if(OnSegment(point,hull[e],hull[(e+1)%hull.Count]) && !point.Equals(hull[(e+1)%hull.Count]))count++;
+                        if(count>Polygon.MaxVertexCount)continue;
+                        foreach(int k in cluster.OrderByDescending(k=>k))pieces.RemoveAt(k);
+                        pieces.Add(hull);merged=true;break;
+                    }
+                    if(merged)continue;
+                    return;
+                }
                 pieces[bestA] = bestHull; pieces.RemoveAt(bestB);
             }
         }

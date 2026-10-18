@@ -6,6 +6,30 @@ namespace Weland
 {
     public partial class Editor
     {
+        public bool OptimizeSelectedGeometry(out string reason)
+        {
+            PrepareHistoryNavigation();var selected=new HashSet<short>(SelectedLuaPolygons());
+            if(selected.Count<2){reason="Select at least two polygons to optimize.";return false;}
+            var trial=new Level();trial.Load(Level.Save().Clone());int removed=0;
+            while(true) {
+                bool merged=false;
+                var candidates=trial.Lines.Where(l=>selected.Contains(l.ClockwisePolygonOwner) && selected.Contains(l.CounterclockwisePolygonOwner))
+                    .OrderByDescending(l=>{var p=trial.Endpoints[l.EndpointIndexes[0]];var q=trial.Endpoints[l.EndpointIndexes[1]];return (long)(p.X-q.X)*(p.X-q.X)+(long)(p.Y-q.Y)*(p.Y-q.Y);}).ToList();
+                foreach(var line in candidates) {
+                    short a=line.ClockwisePolygonOwner,b=line.CounterclockwisePolygonOwner;
+                    if(!trial.CanOptimizePair(a,b))continue;
+                    var attempt=new Level();attempt.Load(trial.Save().Clone());
+                    int count=trial.Polygons.Count;
+                    if(!attempt.Pathfinder(a,b,false,out _) || attempt.Polygons.Count!=count-1)continue;
+                    selected=new HashSet<short>(selected.Where(i=>i!=a && i!=b).Select(i=>(short)(i-(i>a?1:0)-(i>b?1:0))));
+                    selected.Add((short)(attempt.Polygons.Count-1));trial=attempt;removed++;merged=true;break;
+                }
+                if(!merged)break;
+            }
+            if(removed==0){reason="No compatible adjacent polygons could be merged within the convex/eight-vertex limits.";return false;}
+            SetUndo("Optimize selected geometry");Level.Load(trial.Save().Clone());Selection.Clear();Selection.Polygons.UnionWith(selected);
+            Changed=Dirty=RedrawAll=true;CommitHistory();reason=$"Removed {removed} unnecessary polygon boundary/boundaries.";return true;
+        }
         public void SelectAllGeometry()
         {
             PrepareHistoryNavigation(); Selection.Clear();

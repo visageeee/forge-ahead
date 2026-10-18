@@ -348,6 +348,21 @@ namespace Weland
                     drawer.DrawLine(selectedLineColor, new Drawer.Point(center.X, center.Y - 6), new Drawer.Point(center.X, center.Y + 6));
                 }
 
+                if (Editor != null && Editor.Tool == Tool.BakeLighting && Editor.HasBakeLight)
+                {
+                    foreach (var piece in Editor.LightingPreview)
+                    {
+                        var points=new Drawer.Point[piece.Points.Count];
+                        for(int i=0;i<points.Length;i++)points[i]=Transform.ToScreenPoint(piece.Points[i]);
+                        drawer.FillPolygon(piece.Shadow ? new Drawer.Color(.18,.18,.22) : new Drawer.Color(.85,.75,.35),new List<Drawer.Point>(points));
+
+                    }
+                    var light=Transform.ToScreenPoint(Editor.BakeLightPosition);
+                    var lightColor=new Drawer.Color(1, .8, 0);
+                    drawer.DrawLine(lightColor,new Drawer.Point(light.X-8,light.Y),new Drawer.Point(light.X+8,light.Y));
+                    drawer.DrawLine(lightColor,new Drawer.Point(light.X,light.Y-8),new Drawer.Point(light.X,light.Y+8));
+                }
+
                 if (Editor != null && Editor.DrawingCircle)
                 {
                     Drawer.Color color = Editor.CircleMessage == null ? selectedLineColor : invalidPolygonColor;

@@ -81,11 +81,16 @@ namespace Weland
         {
             _cssProvider = new CssProvider();
             _cssProvider.LoadFromData($@"
-			button.color-radio-button:checked {{
-				border: 1px solid black;
+			button.color-radio-button {{ border: 3px solid transparent; }}
+            button.color-radio-button:checked {{
+				border: 3px solid #ffb347;
+                box-shadow: inset 0 0 0 1px #151515;
+                background-image: none;
+                background-color: #46311b;
 			}}
 			button.color-radio-button label {{
 				color: white;
+                padding: 4px;
 			}}
 		");
 
@@ -101,10 +106,14 @@ namespace Weland
             customCss.LoadFromData($@"
 			button.color-radio-button label {{
 				background-color: rgb({(int)(c.R * 255)}, {(int)(c.G * 255)}, {(int)(c.B * 255)});
+                color: {(0.2126*c.R+0.7152*c.G+0.0722*c.B>0.55 ? "black" : "white")};
 			}}"
         );
 
             Child.StyleContext.AddProvider(customCss, StyleProviderPriority.Application);
+            string originalLabel=label;
+            void UpdateSelectionLabel(){if(Child is Label text)text.Text=(Active?"✓  ":"    ")+originalLabel;}
+            Toggled+=(sender,args)=>UpdateSelectionLabel();UpdateSelectionLabel();
         }
 
         protected override void OnSizeAllocated(Gdk.Rectangle rect)

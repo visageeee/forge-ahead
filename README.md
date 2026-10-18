@@ -134,3 +134,215 @@ tango-art-libre, GIMP, and openclipart.org.
 
 Forge Ahead is distributed under the **GNU General Public License, version 2**.
 See [COPYING.txt](COPYING.txt) for the license.
+
+### Experimental baked floor lighting
+
+With the Select tool, select the receiving polygons, then choose the **Bake lighting**
+tool (sun icon). Click and drag inside a polygon to place or move the light with a live shadow preview. Its dedicated
+sidebar contains the preview and bake controls. Set
+its **absolute height** in world units (above the floor and below the ceiling), the
+lit and shadow brightness percentages, and drag the light (or click **Preview shadows**). Yellow regions
+are lit; dark regions are shadowed. This display-only overlay does not generate
+geometry, create lights, or depend on the bake budget and shared-edge limits.
+**Bake floor lighting** then attempts to build matching map geometry; baked shadows
+may be coarser than the live preview.
+
+This creates ordinary convex map polygons and two constant floor lights. Raised
+floors cast finite shadows according to the source height. Selected floors at or
+above the light receive the shadow brightness: their top surfaces cannot receive
+direct light from below. They still block light reaching lower floors. The source
+only needs to be between the floor and ceiling of its own containing polygon. One-sided map boundaries
+block light. All map geometry can cast shadows, but only selected floors are changed.
+Original floor textures, heights and other surface settings are retained. There is
+no distance falloff, soft shadow or dynamic platform lighting. Floor shadow geometry
+currently uses raised-floor blockers; ceiling and wall sampling tests both floor
+and ceiling openings.
+Select normal polygons without Lua triggers. The polygon budget limits output pieces;
+the minimum area is in squared map-coordinate units (1024 coordinate units = 1 WU).
+If exact shadow intersections cannot be built, the editor automatically retries with
+approximate shadows on an integer-coordinate subdivision. Shadow edges may be angular
+and very narrow shadows may be missed, but floor coverage is preserved. The bake result message identifies approximate results. Refinement uses up to 64 pieces per selected floor,
+within the total polygon budget. Shared-edge vertex limits trigger retries at lower
+detail. If necessary, each selected floor receives a single light level sampled at
+its center, with no new geometry; the bake result message reports this fallback. Unsafe geometry still cancels without changing the
+map; increase the budget or use a smaller selection if necessary.
+
+Preview is temporary. Undo reverses a complete bake, including added lights and
+geometry; redo reapplies it. Repeated bakes in the same editing session automatically reuse the pre-bake geometry
+while the map and scope are otherwise unchanged. After reopening a baked map or making
+other map edits, use Undo or an unbaked copy if you want to discard the earlier splits. Light markers are editor-only and are not saved. Existing
+polygon IDs are retained for one resulting piece; references to that polygon do not
+automatically expand to include the other pieces. Back up maps before experimenting.
+
+Wall lighting is included when baking: existing sides belonging to selected polygons
+(and their new pieces) receive lit or shadow brightness. Fifteen rays across the width and height of each
+primary, secondary and transparent wall section test intervening floor/ceiling openings
+and solid boundaries. Back-facing wall surfaces are shadowed. Textures, offsets and
+control-panel settings are preserved; unselected wall sides are unchanged. This is
+one light value per existing wall section, blended between lit and shadow brightness
+according to the blocked sample fraction, not a vertically subdivided shadow.
+Intermediate constant lights are shared across walls within the bake. The
+live top-down overlay still previews floor shadows only; inspect walls in visual mode.
+
+Bake results appear directly under the Bake button and in the status bar, including
+failure reasons and the number of new polygons. Failed geometry attempts retry at
+progressively lower detail for all geometry errors, including budget and precision
+failures. A final lighting-only fallback creates no shadow boundaries and is explicitly
+reported as **Simplified**, with a plain-language fallback reason. Each retry
+starts from the unchanged map. The budget must cover at least the selected polygon
+count; invalid source placement and unsupported polygon types still require correction.
+
+**Whole map** is enabled by default in the lighting sidebar. Preview and Bake use all
+map polygons without requiring a selection; uncheck it to work on selected polygons.
+For whole-map baking the budget is raised to at least the existing polygon count.
+Special polygons (including platforms) and polygons with Lua triggers receive lighting
+without being split, preserving their IDs and behavior. Their floor brightness is
+sampled at the center. Platform shadows remain static at their current map height.
+
+Successful approximate bakes report the approximation as applied, rather than repeating
+the internal exact-intersection error. “Shadow edges required coordinate rounding”
+is a fallback explanation, not a failed bake. “Simplified” explicitly means that no
+new shadow boundaries were created. Actual failures remain prefixed “Bake failed”.
+
+Lighting bakes simplify their generated pieces before creating map geometry. Adjacent
+pieces with the same shade are merged repeatedly when their union is convex and fits
+the eight-vertex limit. Unused sampling corners are discarded; original map vertices
+and junctions needed by other pieces remain. Merging stays inside each original floor,
+so its height, texture and other polygon settings are preserved. This is a greedy
+simplification, not a guarantee of the smallest possible polygon count.
+
+### Rebuild lighting geometry
+
+Enable **Rebuild lighting geometry** in the lighting sidebar to reconstruct connected
+compatible floor regions. Region outlines and holes are extracted without the
+eight-vertex limit, old internal edges and unused interior vertices are discarded,
+and lit and shadowed pieces are installed together across each region.
+Only adjacent normal polygons with matching surface settings can merge; height,
+texture, light, media and other setting changes stay intact. Shared control panels
+and transparent wall textures prevent a merge. Convexity and eight-vertex limits
+apply to the final pieces. Concave outlines and holes are supported; the result is
+not guaranteed to have the mathematically smallest polygon count.
+
+The operation and its lighting changes form one undo step. Objects are reassigned
+by the existing Pathfinder geometry operation. Polygon IDs may change. If embedded
+Lua, polygon Lua triggers or terminal data are present, rebuilding is conservatively
+skipped and the normal bake runs; the result message reports this. External scripts
+cannot be detected: leave this mode off if external code depends on polygon IDs.
+Preview continues to show the intended
+lighting, not the final rebuilt polygon mesh. The result reports removed boundaries.
+
+Bake diagnostics report the underlying geometry error instead of a generic safety
+fallback. Where available they include the polygon ID and construction stage, plus
+the last rejected approximation. The result label is selectable so it can be copied
+with a bug report. With rebuilding enabled, IDs refer to the temporary merged map.
+
+Lighting normalizes imported polygon edge ordering on its working copy before
+splitting or rebuilding. Maps whose vertices are paired with outgoing edges are
+converted to the editor's incoming-edge convention, carrying side and adjacency
+entries with their lines. This changes no coordinates or winding and is included
+in the bake's undo step. It prevents false shared-edge conflicts when mixing imported
+polygons with newly generated shadow polygons.
+
+Boundary-based lighting allows a bounded integer-rounding area difference (at most
+one coordinate unit times the receiving floor perimeter), then still validates the
+constructed geometry for crossings, overlaps and shared-edge ownership. This avoids
+rejecting otherwise valid shadow boundaries for sub-unit intersection rounding.
+With **Rebuild lighting geometry**, **Allow coarse approximation** is off by default:
+if boundary-based construction fails, the bake leaves the map unchanged and reports
+why. Enable it explicitly to permit the sampling-triangle fallback. Moving the sun and baking again reuses the unbaked source while the last bake is
+otherwise unchanged.
+
+Automatic rebaking stores the original map and the last baked result in memory.
+It recomputes both lit and shadowed regions from that original, replacing old shadow
+splits and lights rather than layering another bake onto them. The result message
+confirms replacement. Each replacement is undoable back to the preceding baked result.
+Any intervening map change, different selected scope, or different map prevents reuse,
+so edits are never overwritten. The source snapshot is not saved in the map file.
+This fixes accumulated geometry; it does not remove integer-coordinate rounding or
+make the optional sampling approximation exact.
+
+The pre-bake rebuild ignores old **floor and ceiling light IDs** when checking compatibility:
+these will be replaced by the new bake. Thus subdivisions left solely by previous
+floor shading can be removed even after reopening a map. The post-bake merge still
+requires matching floor lights so new shadow boundaries survive. Ceiling settings,
+textures, media, sounds, special behavior and protected shared sides remain meaningful
+boundaries. Reconstruction spans the connected compatible region rather than
+requiring each original pair to form a convex polygon.
+
+Region reconstruction rebuilds boundary-side records and reassigns objects and notes
+by position. Solid/decorative/landscape shared lines, control panels and transparent
+wall textures remain protected even when another route connects their polygons.
+Groups containing built-in polygon destinations keep their geometry. Reconstruction
+is performed on a disposable working map and only committed after topology validation.
+If a region cannot be reconstructed safely, the current map is left unchanged.
+
+When baking a reconstructed region, the already clipped shadow pieces are used
+directly. Regions with multiple raised islands do not require a second, unused
+hole-bridging triangulation. Boundary area, planned coverage and final topology
+are still checked before applying the bake.
+
+Lighting simplification also tries exact multi-polygon convex unions when pairwise
+merging stalls. This removes unnecessary flat subdivisions such as pinwheel
+layouts while retaining shade boundaries and the eight-vertex limit. It is a
+simplification pass, not a guarantee of the minimum possible polygon count.
+
+After merging, lighting-region rebuilding now cancels internal same-shade edges,
+traces the remaining boundary and repartitions it from scratch. This can replace
+old diagonals in newly lit concave areas instead of merely joining old polygons.
+Holes remain excluded. A new partition is used only when it has fewer polygons,
+exactly preserves area and meets shared-vertex limits; ambiguous boundaries or
+failed triangulation retain the valid merged layout. Protected region boundaries
+are unchanged.
+
+Lighting reconstruction retains textured wall-segment endpoints and restores
+sides according to the recreated line direction. This preserves distinct wall
+textures and their horizontal offsets while removing internal floor divisions.
+
+Ceilings are shaded automatically when baking. Area-weighted samples across each
+receiving ceiling test visibility through intervening floor/ceiling openings and
+one-sided walls. Each ceiling receives one blended brightness using the same lit
+and shadow settings as the floor; ceiling shading does not add polygon splits.
+The live preview still shows floors only. Ceiling textures are preserved, and
+ceiling light changes participate in save/load and bake undo/redo.
+
+Lighting reconstruction joins generated seams that differ by at most one map
+coordinate and removes nearly collinear generated corners. Original surviving
+map vertices remain protected. This avoids thin fragments caused by independently
+rounded shadow intersections; final area and topology checks still apply.
+Use **Rebuild lighting geometry** for this pass. Leave **Allow coarse approximation**
+off to avoid replacing a failed detailed bake with sampling triangles.
+
+Reconstruction snapshots wall sides and flags before deleting any regions and
+restores them after all regions have been built. New internal shadow boundaries
+remain open portals; intentional original wall flags are retained. Wall matching
+allows one-coordinate rounding at generated splits, and side types are updated
+from the final adjacent floor and ceiling heights.
+
+### Sun Lua presets (Sprintathon)
+
+The **Sun** category uses Sprintathon's eight-point `Level.sun.path` API.
+**Declare eight-step sun path** provides azimuth and elevation for each of its
+exactly eight points. Insert it on an enabled polygon trigger; the editor emits
+its declaration at the top of the generated level Lua, before callbacks and
+lighting precomputation. It does not redeclare the path when entering a polygon.
+Only one path is supported per level: identical declarations are deduplicated;
+conflicting declarations report an error.
+
+**Smooth sunrise** runs from path position 0 to 1; **Smooth sunset** runs from 1
+to 0. Duration, start/end positions and brightness are editable. Colors change
+smoothly between warm dawn/dusk and daylight. **Set sun instantly** and
+**Transition sun smoothly** also use a path position, plus size, RGB color,
+brightness, shafts, glare and bloom. Enable, disable, stop and reset remain
+available; reset clears appearance overrides but cannot remove a locked path.
+
+When a motion action has no explicit path preset, the generated script supplies
+eight points from elevation -3 to 35 degrees at azimuth 250, unless another
+level script has already declared a path. Levels without a path/motion preset
+receive no automatic declaration. Replace previously inserted sun actions with
+these updated presets, Apply, and save to regenerate the level Lua.
+
+Transitions continue after leaving the polygon and restore on saved-game load.
+Use Once per level to prevent re-entry from restarting the animation. Sprintathon
+uses the declared path for precomputed lighting blends; editor-baked polygon
+geometry is unchanged. Visible Sun and Landscape Light Shafts still respect the
+player's graphics settings. In-game visual validation remains necessary.

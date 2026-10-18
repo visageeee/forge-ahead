@@ -84,6 +84,7 @@ namespace Weland
         [Widget] RadioToolButton boxButton;
         [Widget] RadioToolButton circleButton;
         [Widget] RadioToolButton ringButton;
+        [Widget] RadioToolButton lightingButton;
         [Widget] RadioToolButton fillButton;
         [Widget] RadioToolButton objectButton;
         [Widget] RadioToolButton annotationButton;
@@ -351,6 +352,7 @@ namespace Weland
             const int id = 1;
             statusbar.Pop(id);
             if (editor.Pasting) { statusbar.Push(id, editor.PasteMessage); return; }
+            if (editor.Tool == Tool.BakeLighting) {statusbar.Push(id,editor.BakeResultMessage ?? editor.BakePreviewMessage ?? "Drag the light to preview shadows. Bake creates geometry.");return;}
 
             if (editor.Tool == Tool.Line && editor.LineToolError != null)
             {
@@ -859,7 +861,7 @@ namespace Weland
                 else if (editor.UpdateHover(drawingArea.Transform.ToMapX(screenX), drawingArea.Transform.ToMapY(screenY))) Redraw();
             }
 
-            if (editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Ring || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
+            if (editor.Tool == Tool.BakeLighting || editor.Tool == Tool.Line || editor.Tool == Tool.Box || editor.Tool == Tool.Circle || editor.Tool == Tool.Ring || editor.Tool == Tool.Select || editor.Tool == Tool.Move)
             {
                 UpdateStatusBar();
             }
@@ -1566,6 +1568,10 @@ namespace Weland
             {
                 ChooseTool(Tool.Box);
             }
+            else if (button == lightingButton)
+            {
+                ChooseTool(Tool.BakeLighting);
+            }
             else if (button == ringButton)
             {
                 ChooseTool(Tool.Ring);
@@ -1840,6 +1846,7 @@ namespace Weland
         void ChooseTool(Tool tool)
         {
             editor.Tool = tool;
+            if (lightingOptions != null) { if (tool == Tool.BakeLighting) lightingOptions.Show(); else lightingOptions.Hide(); }
             if (lineOptions != null) { if (tool == Tool.Line) lineOptions.Show(); else lineOptions.Hide(); }
             if (selectOptions != null)
             {
@@ -1869,7 +1876,7 @@ namespace Weland
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
             }
-            else if (tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Ring || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
+            else if (tool == Tool.BakeLighting || tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Ring || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Cross);
             }
@@ -2387,6 +2394,13 @@ namespace Weland
                 "No suitable wall textures are available in the loaded Shapes file. Choose your scenario's Shapes file in Preferences before paving.");
             dialog.Run();
             return false;
+        }
+
+        protected void OnOptimizeSelectedGeometry(object o, EventArgs e)
+        {
+            editor.OptimizeSelectedGeometry(out string reason);
+            UpdateInspector();UpdateStatusBar();Redraw();
+            using(var dialog=new MessageDialog(window1,DialogFlags.Modal,MessageType.Info,ButtonsType.Ok,reason)){dialog.Run();dialog.Hide();}
         }
 
         protected void OnPave(object o, EventArgs e)

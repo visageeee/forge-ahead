@@ -75,6 +75,7 @@ namespace Weland
         public static string Generate(Level level)
         {
             var source=new StringBuilder(Header+"-- Edit using Select > Polygon Lua trigger.\n");
+            source.Append(PolygonLuaActions.SunPathDeclaration(level.Polygons.Where(p=>p.LuaTriggerEnabled).Select(p=>p.LuaTriggerCode)));
             var collections=new SortedSet<int>();
             foreach(var p in level.Polygons.Where(p=>p.LuaTriggerEnabled))
                 foreach(Match match in Regex.Matches(p.LuaTriggerCode,@"^-- Forge Ahead preload collection:(\d+)\s*$",RegexOptions.Multiline)) {
@@ -107,12 +108,19 @@ namespace Weland
             source.Append(@"Triggers = Triggers or {}
 local previous_init, previous_postidle = Triggers.init, Triggers.postidle
 local last_polygon = {}
+local function apply_sun(state)
+  local ok, sun = pcall(function() return Level.sun end)
+  if ok and sun and state and state.current then
+    for key, value in pairs(state.current) do sun[key] = value end
+  end
+end
 function Triggers.init(restoring)
   if restoring then Game.restore_saved() end
   if previous_init then previous_init(restoring) end
   if not restoring or not Game._forge_ahead_polygon_fired then
     Game._forge_ahead_polygon_fired = {}
     Game._forge_ahead_fog = nil
+    Game._forge_ahead_sun = nil
     Game._forge_ahead_spawners = nil
     Game._forge_ahead_delays = nil
     Game._forge_ahead_waves = nil
@@ -120,6 +128,7 @@ function Triggers.init(restoring)
     Game._forge_ahead_move_stops = nil
     Game._forge_ahead_move_orders = nil
   end
+  apply_sun(Game._forge_ahead_sun)
   last_polygon = {}
   if restoring then
     for player in Players() do
@@ -281,6 +290,24 @@ function Triggers.postidle()
         end
       end
     end
+  end
+  local sun_fade = Game._forge_ahead_sun
+  if sun_fade and sun_fade.target then
+    sun_fade.elapsed = math.min(sun_fade.ticks, sun_fade.elapsed + 1)
+    local t = sun_fade.elapsed / sun_fade.ticks
+    t = t * t * (3 - 2 * t)
+    local current = {enabled=true}
+    for key, finish in pairs(sun_fade.target) do
+      if key ~= ""enabled"" then
+        local start = sun_fade.from[key]
+        local delta = finish - start
+        current[key] = start + delta * t
+        if sun_fade.elapsed == sun_fade.ticks then current[key] = finish end
+      end
+    end
+    sun_fade.current = current
+    apply_sun(sun_fade)
+    if sun_fade.elapsed == sun_fade.ticks then sun_fade.target = nil; sun_fade.from = nil end
   end
   -- Advance once per game tick, independently of player count.
   for _, key in ipairs({""fog"", ""underwater_fog""}) do
