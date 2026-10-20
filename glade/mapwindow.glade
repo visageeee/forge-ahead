@@ -2247,6 +2247,17 @@
                   </packing>
                 </child>
                 <child>
+                  <object class="GtkRadioToolButton" id="cameraButton">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="tooltip-text">Camera paths: place and edit camera waypoints</property>
+                    <property name="label">Camera paths</property>
+                    <property name="icon-name">camera-photo</property>
+                    <property name="group">selectButton</property>
+                    <signal name="toggled" handler="OnChooseTool" swapped="no"/>
+                  </object>
+                </child>
+                <child>
                   <object class="GtkRadioToolButton" id="lightingButton">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>

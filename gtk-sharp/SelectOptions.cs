@@ -116,3 +116,104 @@ namespace Weland
         }
     }
 }
+
+namespace Weland {
+ public partial class MapWindow {
+    Frame cameraOptions;
+    void SetupCameraOptions(Box sidebar) {
+        cameraOptions=new Frame("Camera paths"){NoShowAll=true,Margin=6};
+        var box=new Box(Orientation.Vertical,6){Margin=8};cameraOptions.Add(box);
+        var cameraPage=new Box(Orientation.Vertical,6){Margin=6};
+        var captionPage=new Box(Orientation.Vertical,6){Margin=6};
+        var tabs=new Notebook();
+        void AddPage(Box contents,string label) {
+            var scroll=new ScrolledWindow{HeightRequest=360};scroll.SetPolicy(PolicyType.Never,PolicyType.Automatic);
+            scroll.AddWithViewport(contents);tabs.AppendPage(scroll,new Label(label));
+        }
+        AddPage(cameraPage,"Waypoints");AddPage(captionPage,"Captions");
+        var paths=new ComboBoxText();var name=new Entry();var points=new ComboBoxText();
+        var message=new Label(""){Xalign=0,LineWrap=true,MaxWidthChars=28};
+        box.PackStart(paths,false,false,0);box.PackStart(name,false,false,0);
+        var buttons=new Box(Orientation.Horizontal,4);var add=new Button("New");var rename=new Button("Rename");var remove=new Button("Delete path");
+        foreach(var b in new[]{add,rename,remove})buttons.PackStart(b,true,true,0);box.PackStart(buttons,false,false,0);
+        box.PackStart(new Label("Left-click selects; left-drag moves.\nRight-click adds a waypoint.\nHeights are absolute world units."){Xalign=0},false,false,0);
+        box.PackStart(points,false,false,0);
+        box.PackStart(tabs,true,true,0);
+        SpinButton Field(string title,double min,double max,double step,int digits,Box target=null) {
+            var row=new Box(Orientation.Horizontal,4);row.PackStart(new Label(title){Xalign=0},true,true,0);
+            var input=new SpinButton(min,max,step){Numeric=true,Digits=(uint)digits,WidthChars=7};row.PackStart(input,false,false,0);(target??cameraPage).PackStart(row,false,false,0);return input;
+        }
+        Gtk.Scale Angle(string title,double min,double max) {
+            cameraPage.PackStart(new Label(title){Xalign=0},false,false,0);
+            var slider=new Gtk.Scale(Orientation.Horizontal,min,max,1){Digits=0,DrawValue=true};
+            cameraPage.PackStart(slider,false,false,0);return slider;
+        }
+        var z=Field("Height",-32,31.999,0.125,3);var yaw=Angle("Facing (degrees)",0,359);var pitch=Angle("Pitch (degrees)",-90,90);var seconds=Field("Seconds to next / final hold",1.0/30,3600,0.1,3);
+        captionPage.PackStart(new Label("Text shown on arrival at this waypoint"){Xalign=0,LineWrap=true},false,false,0);
+        var title=new Entry{MaxLength=240,TooltipText="Enter a title or caption for the selected waypoint"};captionPage.PackStart(title,false,false,0);
+        var titleSeconds=Field("Caption seconds",1.0/30,120,0.1,3,captionPage);
+        var titleX=Field("Caption centre X (%)",0,100,1,0,captionPage);var titleY=Field("Caption centre Y (%)",0,100,1,0,captionPage);
+        var titleSize=Field("Caption size (%)",50,400,5,0,captionPage);
+        var colorRow=new Box(Orientation.Horizontal,6);colorRow.PackStart(new Label("Caption color"){Xalign=0},true,true,0);
+        var titleColor=new ColorButton();colorRow.PackStart(titleColor,false,false,0);captionPage.PackStart(colorRow,false,false,0);
+        var fadeIn=Field("Fade in (seconds)",0,120,0.1,2,captionPage);var fadeOut=Field("Fade out (seconds)",0,120,0.1,2,captionPage);
+        captionPage.PackStart(new Label("Position, size, RGB and fades require the\nSprintathon styled-caption patch. Older\nengines show ordinary HUD text.\nCaption duration includes the fades."){Xalign=0,LineWrap=true,MaxWidthChars=28},false,false,0);
+        var order=new Box(Orientation.Horizontal,4);var up=new Button("Earlier");var down=new Button("Later");var delete=new Button("Delete point");foreach(var b in new[]{up,down,delete})order.PackStart(b,true,true,0);cameraPage.PackStart(order,false,false,0);
+        cameraPage.PackStart(new Label("Play using the Camera Lua preset.\nPlayback returns to the player.\nSegments are straight; avoid walls."){Xalign=0,LineWrap=true},false,false,0);
+        var check=new Button("Check path");
+        check.Clicked+=(o,e)=>{var data=editor.GetCameraPaths();if(editor.CameraPathIndex>=0&&editor.CameraPathIndex<data.Count)message.Text=CameraPaths.Warning(editor.Level,data[editor.CameraPathIndex]);};
+        cameraPage.PackStart(check,false,false,0);
+        box.PackStart(message,false,false,0);
+        bool refreshing=false,editingValue=false;
+        void Refresh() {
+            if(editingValue){Redraw();return;}
+            refreshing=true;
+            var data=editor.GetCameraPaths();paths.RemoveAll();foreach(var p in data)paths.AppendText(p.Name);
+            if(editor.CameraPathIndex>=data.Count)editor.CameraPathIndex=data.Count-1;
+            paths.Active=editor.CameraPathIndex;points.RemoveAll();name.Text="";
+            bool valid=editor.CameraPathIndex>=0&&editor.CameraPathIndex<data.Count;
+            if(valid){var p=data[editor.CameraPathIndex];name.Text=p.Name;for(int i=0;i<p.Points.Count;i++)points.AppendText("Waypoint "+(i+1));if(editor.CameraPointIndex>=p.Points.Count)editor.CameraPointIndex=p.Points.Count-1;points.Active=editor.CameraPointIndex;valid=editor.CameraPointIndex>=0;
+                if(valid){var v=p.Points[editor.CameraPointIndex];z.Value=v.Z/1024.0;yaw.Value=v.Yaw;pitch.Value=v.Pitch;seconds.Value=v.Ticks/30.0;title.Text=v.Title;titleSeconds.Value=v.TitleTicks/30.0;
+                    titleX.Value=v.TitleX;titleY.Value=v.TitleY;titleSize.Value=v.TitleSize;
+                    titleColor.Rgba=new Gdk.RGBA{Red=v.TitleRed/255.0,Green=v.TitleGreen/255.0,Blue=v.TitleBlue/255.0,Alpha=1};
+                    fadeIn.Value=v.TitleFadeIn/30.0;fadeOut.Value=v.TitleFadeOut/30.0;}
+            }
+            foreach(var w in new Widget[]{z,yaw,pitch,seconds,title,titleSeconds,titleX,titleY,titleSize,titleColor,fadeIn,fadeOut,up,down,delete})w.Sensitive=valid;
+            message.Text=editor.CameraMessage;
+            if(string.IsNullOrEmpty(message.Text))message.Text="Use Check path to validate segments before playback.";
+            refreshing=false;Redraw();
+        }
+        void Change(string label,System.Action<System.Collections.Generic.List<CameraPath>> action){try{var data=editor.GetCameraPaths();action(data);editor.StoreCameraPaths(data,label);UpdateStatusBar();}catch(Exception ex){message.Text=ex.Message;}}
+        paths.Changed+=(o,e)=>{if(refreshing)return;editor.CameraPathIndex=paths.Active;editor.CameraPointIndex=-1;Refresh();};
+        points.Changed+=(o,e)=>{if(refreshing)return;editor.CameraPointIndex=points.Active;Refresh();};
+        add.Clicked+=(o,e)=>Change("Create camera path",data=>{int n=1;while(data.Exists(p=>p.Name=="Camera "+n))n++;data.Add(new CameraPath{Name="Camera "+n});editor.CameraPathIndex=data.Count-1;editor.CameraPointIndex=-1;});
+        rename.Clicked+=(o,e)=>{string title=name.Text;Change("Rename camera path",data=>{if(editor.CameraPathIndex>=0)data[editor.CameraPathIndex].Name=title;});};
+        remove.Clicked+=(o,e)=>Change("Delete camera path",data=>{if(editor.CameraPathIndex>=0)data.RemoveAt(editor.CameraPathIndex);editor.CameraPointIndex=-1;});
+        void UpdateValue(System.Action<CameraWaypoint> edit) {
+            if(refreshing)return;
+            var data=editor.GetCameraPaths();int pi=editor.CameraPathIndex,wi=editor.CameraPointIndex;
+            if(pi<0||pi>=data.Count||wi<0||wi>=data[pi].Points.Count)return;
+            edit(data[pi].Points[wi]);editingValue=true;
+            try{editor.StoreCameraPaths(data,"Edit camera waypoint");message.Text="";}
+            catch(Exception ex){message.Text=ex.Message;}
+            finally{editingValue=false;}
+        }
+        z.ValueChanged+=(o,e)=>UpdateValue(v=>v.Z=(short)Math.Round(z.Value*1024));
+        yaw.ValueChanged+=(o,e)=>UpdateValue(v=>v.Yaw=(short)Math.Round(yaw.Value));
+        pitch.ValueChanged+=(o,e)=>UpdateValue(v=>v.Pitch=(short)Math.Round(pitch.Value));
+        seconds.ValueChanged+=(o,e)=>UpdateValue(v=>v.Ticks=Math.Max(1,(int)Math.Round(seconds.Value*30)));
+        title.Changed+=(o,e)=>UpdateValue(v=>v.Title=title.Text);
+        titleSeconds.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleTicks=Math.Max(1,(int)Math.Round(titleSeconds.Value*30)));
+        titleX.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleX=titleX.ValueAsInt);
+        titleY.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleY=titleY.ValueAsInt);
+        titleSize.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleSize=titleSize.ValueAsInt);
+        titleColor.ColorSet+=(o,e)=>UpdateValue(v=>{var c=titleColor.Rgba;v.TitleRed=(int)Math.Round(c.Red*255);v.TitleGreen=(int)Math.Round(c.Green*255);v.TitleBlue=(int)Math.Round(c.Blue*255);});
+        fadeIn.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleFadeIn=(int)Math.Round(fadeIn.Value*30));
+        fadeOut.ValueChanged+=(o,e)=>UpdateValue(v=>v.TitleFadeOut=(int)Math.Round(fadeOut.Value*30));
+        void Reorder(int delta){Change("Reorder camera waypoint",data=>{var p=data[editor.CameraPathIndex].Points;int i=editor.CameraPointIndex,j=i+delta;if(j<0||j>=p.Count)return;var v=p[i];p[i]=p[j];p[j]=v;editor.CameraPointIndex=j;});}
+        up.Clicked+=(o,e)=>Reorder(-1);down.Clicked+=(o,e)=>Reorder(1);
+        delete.Clicked+=(o,e)=>Change("Delete camera waypoint",data=>data[editor.CameraPathIndex].Points.RemoveAt(editor.CameraPointIndex));
+        editor.CameraUpdated=Refresh;cameraOptions.Shown+=(o,e)=>Refresh();box.ShowAll();sidebar.PackStart(cameraOptions,false,false,0);
+    }
+ }
+}

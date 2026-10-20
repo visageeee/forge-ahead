@@ -100,6 +100,10 @@ namespace Weland
                 Array.Copy(originalLights, lights, originalLights.Length);
                 returned.Chunks[Light.Tag] = lights;
             }
+            // The engine does not retain editor-only camera waypoint metadata.
+            // Restore authoring data, not the runtime camera playback state.
+            if(original.Chunks.TryGetValue(CameraPaths.Tag,out byte[] cameraData))returned.Chunks[CameraPaths.Tag]=(byte[])cameraData.Clone();
+            else returned.Chunks.Remove(CameraPaths.Tag);
             if(original.Chunks.TryGetValue(PolygonLua.Tag,out byte[] triggerData))returned.Chunks[PolygonLua.Tag]=(byte[])triggerData.Clone();
             else returned.Chunks.Remove(PolygonLua.Tag);
             if (original.Chunks.TryGetValue(Tag, out byte[] bytes)) returned.Chunks[Tag] = (byte[])bytes.Clone();

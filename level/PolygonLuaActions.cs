@@ -92,6 +92,8 @@ namespace Weland
                 (explicitPath?"":"    if sun.path == nil then\n")+"    sun.path = "+selected+"\n"+(explicitPath?"":"    end\n")+"  end\nend\n";
         }
         public static readonly PolygonLuaAction[] Catalog={
+            new PolygonLuaAction{Id="camera_play",Category="Camera",Label="Play camera path",Description="Enter the exact camera path name. Returns to the player after the final hold. Rename references when renaming a path.",HasText=true,Parameters=Array.Empty<LuaActionParameter>()},
+            Action("camera_stop","Camera","Stop camera path","Return the view to the player."),
             Action("sun_path","Sun","Declare eight-step sun path","One path per level, declared before lighting loads. Insert on an enabled polygon trigger; the editor moves the declaration to level-script top level.",Enumerable.Range(0,8).SelectMany(i=>new[]{new LuaActionParameter("az"+i,"Step "+(i+1)+" azimuth",250,0,360,2),new LuaActionParameter("el"+i,"Step "+(i+1)+" elevation",-3+38.0*i/7,-90,90,3)}).ToArray()),
             Action("sun_set","Sun","Set sun instantly","Sprintathon only. Enables the visible sun with these settings; respects player graphics toggles.",SunSettings(false)),
             Action("sun_fade","Sun","Transition sun smoothly","Moves from the current sun settings to these values. Moves along the declared eight-step path and replaces the running transition.",SunSettings(true)),
@@ -502,6 +504,8 @@ end
             string ammo="Game.proper_item_accounting = true\nfor _, item in ipairs({2,4,6,7,9,14,16,23,35}) do player.items[item] = 999 end\n";
             string code;
             switch(id) {
+                case "camera_play": code="if forge_ahead_camera_play then forge_ahead_camera_play("+Quote(text??"")+", player) else player:print('No camera paths in this level') end\n";break;
+                case "camera_stop": code="if player.local_ and forge_ahead_camera_stop then forge_ahead_camera_stop() end\n";break;
                 case "sun_path":case "sun_set":case "sun_fade":case "sunrise":case "sunset":case "sun_on":case "sun_off":case "sun_stop":case "sun_reset":
                     code=SunCode(id,N);break;
                 case "flag_set":case "flag_if":

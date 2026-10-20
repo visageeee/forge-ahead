@@ -1,49 +1,31 @@
-Forge Ahead — Map editor for Marathon
+## Forge Ahead — 20261020
 
-An expanded fork of Weland for Marathon, Aleph One, and Sprintathon.
+### Camera paths
 
-Features include snapping box and circle tools, polygon insets and line cuts,
-group selection, move/rotate/scale tools, configurable hover highlights, undo
-history, embedded Lua, fog/collection MML export, and a terminal editor with
-picture import and preview.
+- A dedicated Camera Paths tool for creating and editing named camera movements.
+- Right-click to add waypoints; left-click to select and left-drag to move them.
+- Numbered nodes and direction arrows show waypoint order and camera facing.
+- Edit absolute height, facing, pitch, travel time and the final hold duration.
+- Play or stop named paths through polygon Lua presets. Playback returns to the player when finished.
+- Paths support undo and survive saving, reopening, and returning from visual mode.
 
-### New in v0.4.1
+### Captions
 
-- Delayed Lua actions and named flags for conditional polygon triggers.
-- Enemy waves with wave size, count and pauses after each defeated wave.
-- Dim/brighten all lights, with optional smooth light-state transitions.
-- Restore existing light definitions after scripted visual-mode sessions so
-  runtime light changes do not overwrite the map's starting lighting.
-- Move monsters between polygons, including dormant monsters, with individual
-  path retries and an optional stop on entering the destination polygon.
-- Allow ordinary lines through polygons when Split is unchecked.
+- Add caption text and duration to individual waypoints.
+- Separate Waypoints and Captions tabs make the controls easier to find.
+- Caption position, size, RGB color and fade-in/out controls are available for Sprintathon with the styled-caption engine patch. Older engines show ordinary HUD text.
 
-Existing inserted Lua actions retain their old source: replace movement/light
-presets to use the new options and fixes. Movement still depends on traversable
-routes and engine AI; crowded groups need further in-game testing. Smooth light
-changes begin at phase boundaries and replace flicker/pulse timing. In scripted
-visual-mode sessions, edits to existing light definitions are also discarded;
-new lights and surface assignments are retained.
+### Fixes
 
-### Downloads
+- Fixed camera-node redraws so dragging updates live, with one undo step per drag.
+- Coalesced pointer events and moved expensive whole-path validation to a Check path button.
+- Fixed the Space key switching tools while typing in sidebar text fields.
+- Fixed a startup crash when GTK exposes internal widgets without managed wrappers.
 
-- **Windows x64:** extract `Forge-Ahead-win-x64.zip` and open `ForgeAhead.exe` inside its folder.
-- **Apple Silicon Mac:** extract `Forge-Ahead-osx-arm64.zip` and move `Forge Ahead.app` to Applications.
-- **Intel Mac:** use `Forge-Ahead-osx-x64.zip` instead.
-- **Linux x64:** extract `Forge-Ahead-linux-x64.tar.gz` and run `Start-Forge-Ahead.sh`.
+### Notes
 
-.NET is included in every package. Windows and Mac also bundle GTK.
-Linux targets Ubuntu 24.04 or compatible newer x64 distributions and needs
-system GTK 3 and SVG loaders. On Ubuntu 24.04:
+Camera segments are straight. Check paths before playback, especially around walls or overlapping rooms. The active player can still move during playback, and camera playback does not resume from saved games.
 
-```sh
-sudo apt install libgtk-3-0t64 librsvg2-common adwaita-icon-theme
-```
+Experimental baked lighting remains available. Complex geometry may still produce inaccurate shadows or extra subdivisions; keep a backup before baking.
 
-Mac packages are ad-hoc signed, without Apple notarization. macOS may require
-approval in System Settings → Privacy & Security after the first launch attempt.
-Windows packages do not yet have a trusted publisher signature.
-
-Scenario Shapes files and Aleph One/Sprintathon for visual mode are installed
-separately. Choose their paths in Forge Ahead preferences. Keep each package's files
-together. Please report platform issues with the package name and an error log.
+Packages target Linux x64, Windows x64, macOS Intel and Apple Silicon. .NET is bundled. Windows and Mac include GTK; Linux requires system GTK 3.

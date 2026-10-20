@@ -335,3 +335,187 @@ end
         }
     }
 }
+
+namespace Weland
+{
+    public sealed class CameraWaypoint {
+        public short X,Y,Z; public short Yaw,Pitch; public int Ticks=90;
+        public string Title=""; public int TitleTicks=90;
+        public int TitleX=50,TitleY=80,TitleSize=100;
+        public int TitleRed=255,TitleGreen=255,TitleBlue=255;
+        public int TitleFadeIn=0,TitleFadeOut=0;
+    }
+    public sealed class CameraPath {
+        public string Name="Camera path";
+        public List<CameraWaypoint> Points=new List<CameraWaypoint>();
+    }
+    public static class CameraPaths {
+        public static readonly uint Tag=Wadfile.Chunk("FCAM");
+        const string Name="Forge Ahead Camera Paths";
+        const string Header="-- Forge Ahead camera paths v1\n";
+        public static List<CameraPath> Read(Level level) {
+            var paths=new List<CameraPath>();
+            if(!level.Chunks.TryGetValue(Tag,out var bytes))return paths;
+            using var stream=new MemoryStream(bytes,false);using var r=new BinaryReader(stream,Encoding.UTF8);
+            int version=r.ReadInt32();if(version<1||version>3)throw new InvalidDataException("Unknown camera path format.");
+            int count=r.ReadInt32();if(count<0||count>256)throw new InvalidDataException("Invalid camera path count.");
+            for(int i=0;i<count;i++) {
+                var path=new CameraPath{Name=r.ReadString()};int n=r.ReadInt32();
+                if(n<0||n>4096)throw new InvalidDataException("Invalid camera waypoint count.");
+                for(int j=0;j<n;j++) {
+                    var v=new CameraWaypoint{X=r.ReadInt16(),Y=r.ReadInt16(),Z=r.ReadInt16(),Yaw=r.ReadInt16(),Pitch=r.ReadInt16(),Ticks=r.ReadInt32()};
+                    if(version>=2){v.Title=r.ReadString();v.TitleTicks=r.ReadInt32();}
+                    if(version>=3){v.TitleX=r.ReadInt32();v.TitleY=r.ReadInt32();v.TitleSize=r.ReadInt32();v.TitleRed=r.ReadInt32();v.TitleGreen=r.ReadInt32();v.TitleBlue=r.ReadInt32();v.TitleFadeIn=r.ReadInt32();v.TitleFadeOut=r.ReadInt32();}
+                    path.Points.Add(v);
+                }
+                paths.Add(path);
+            }
+            if(stream.Position!=stream.Length)throw new InvalidDataException("Invalid camera path data.");
+            Validate(paths);return paths;
+        }
+        static void Validate(List<CameraPath> paths) {
+            if(paths.Count>256 || paths.Select(p=>p.Name).Distinct().Count()!=paths.Count)throw new ArgumentException("Camera path names must be unique.");
+            foreach(var p in paths) {
+                if(string.IsNullOrWhiteSpace(p.Name)||p.Name.Length>80||p.Name.Any(char.IsControl)||p.Points.Count>4096)throw new ArgumentException("Invalid camera path name or size.");
+                foreach(var w in p.Points) {
+                    if(w.Ticks<1||w.Ticks>108000||w.Yaw<0||w.Yaw>359||w.Pitch< -90||w.Pitch>90)throw new ArgumentException("Invalid camera waypoint timing or angle.");
+                    if(w.TitleX<0||w.TitleX>100||w.TitleY<0||w.TitleY>100||w.TitleSize<50||w.TitleSize>400||w.TitleRed<0||w.TitleRed>255||w.TitleGreen<0||w.TitleGreen>255||w.TitleBlue<0||w.TitleBlue>255||w.TitleFadeIn<0||w.TitleFadeIn>3600||w.TitleFadeOut<0||w.TitleFadeOut>3600)throw new ArgumentException("Invalid camera caption style.");
+                    if(w.Title==null || Encoding.UTF8.GetByteCount(w.Title)>240 || w.Title.Any(char.IsControl) || w.TitleTicks<1 || w.TitleTicks>3600)throw new ArgumentException("Waypoint captions must be a single line of at most 240 UTF-8 bytes, with a duration of 1 tick to 120 seconds.");
+                }
+            }
+        }
+        public static void Write(Level level,List<CameraPath> paths) {
+            Validate(paths);
+            using var stream=new MemoryStream();using var w=new BinaryWriter(stream,Encoding.UTF8);
+            w.Write(3);w.Write(paths.Count);
+            foreach(var p in paths){w.Write(p.Name);w.Write(p.Points.Count);foreach(var v in p.Points){w.Write(v.X);w.Write(v.Y);w.Write(v.Z);w.Write(v.Yaw);w.Write(v.Pitch);w.Write(v.Ticks);w.Write(v.Title);w.Write(v.TitleTicks);w.Write(v.TitleX);w.Write(v.TitleY);w.Write(v.TitleSize);w.Write(v.TitleRed);w.Write(v.TitleGreen);w.Write(v.TitleBlue);w.Write(v.TitleFadeIn);w.Write(v.TitleFadeOut);}}
+            level.Chunks[Tag]=stream.ToArray();
+        }
+        static string Q(string s)=>"\""+s.Replace("\\","\\\\").Replace("\"","\\\"")+"\"";
+        static string N(short n)=>(n/1024.0).ToString("0.########",System.Globalization.CultureInfo.InvariantCulture);
+        public static string Warning(Level level,CameraPath path) {
+            if(path.Points.Count<2)return "Add at least two waypoints.";
+            for(int i=0;i<path.Points.Count;i++) {
+                var a=path.Points[i];var b=path.Points[Math.Min(i+1,path.Points.Count-1)];
+                int steps=Math.Max(1,(int)Math.Ceiling(Math.Max(Math.Abs(b.X-a.X),Math.Abs(b.Y-a.Y))/32.0));
+                for(int j=0;j<=steps;j++) {
+                    double t=j/(double)steps;short x=(short)Math.Round(a.X+(b.X-a.X)*t),y=(short)Math.Round(a.Y+(b.Y-a.Y)*t);double z=a.Z+(b.Z-a.Z)*t;
+                    short poly=level.GetEnclosingPolygon(new Point(x,y));
+                    if(poly<0||z<=level.Polygons[poly].FloorHeight||z>=level.Polygons[poly].CeilingHeight)return "Waypoint or segment "+(i+1)+" leaves the open map volume. Adjust the path before playback.";
+                }
+            }
+            return "Check playback in game; narrow walls and overlapping rooms require manual review.";
+        }
+        public static string Generate(Level level,List<CameraPath> paths) {
+            var s=new StringBuilder(Header+@"local paths = {}
+local active, remaining, reusable, playback_player
+local caption, caption_age, caption_player, caption_native, caption_slot
+local timeline, elapsed, point_index, next_point
+local function clear_title()
+  if caption_player then
+    if caption_native then caption_player:caption(nil)
+    elseif caption_slot then caption_player.overlays[caption_slot].text = nil end
+  end
+  caption, caption_age, caption_player, caption_native, caption_slot = nil, nil, nil, nil, nil
+end
+local function render_title()
+  local alpha = 1
+  if caption[16] > 0 then alpha = math.min(alpha, caption_age / caption[16]) end
+  if caption[17] > 0 then alpha = math.min(alpha, (caption[9] - caption_age) / caption[17]) end
+  alpha = math.max(0, math.min(1, alpha))
+  alpha = alpha * alpha * (3 - 2 * alpha)
+  if caption_native then
+    caption_player:caption(caption[8], caption[10]/100, caption[11]/100, caption[12]/100,
+      caption[13]/255, caption[14]/255, caption[15]/255, alpha)
+  end
+end
+local function show_title(player, point)
+  if point[8] ~= '' then
+    clear_title()
+    caption, caption_age, caption_player = point, 0, player
+    local ok, method = pcall(function() return player.caption end)
+    caption_native = ok and method ~= nil
+    if caption_native then render_title()
+    else
+      -- Compatibility fallback for engines without styled captions.
+      local slot = #player.overlays - 1
+      if slot >= 0 then
+        caption_slot = slot
+        player.overlays[slot].text = point[8]
+      end
+    end
+  end
+end
+function forge_ahead_camera_stop()
+  if active then active:deactivate() end
+  active, remaining, timeline, playback_player = nil, nil, nil, nil
+  clear_title()
+end
+function forge_ahead_camera_play(name, player)
+  if not player.local_ then return end
+  local data = paths[name]
+  if not data or #data < 2 then player:print('Camera path missing or needs two valid waypoints'); return end
+  forge_ahead_camera_stop()
+  local camera = reusable or Cameras.new()
+  if not camera then player:print('Cannot create camera'); return end
+  reusable = camera
+  camera:clear()
+  remaining = 0
+  for _, p in ipairs(data) do
+    camera.path_points:new(p[1],p[2],p[3],p[4],p[7])
+    camera.path_angles:new(p[5],p[6],p[7])
+    remaining = remaining + p[7]
+  end
+  active = camera
+  timeline, elapsed, point_index, next_point = data, 0, 1, data[1][7]
+  playback_player = player
+  show_title(player, data[1])
+  camera:activate(player)
+end
+Triggers = Triggers or {}
+local previous = Triggers.postidle
+function Triggers.postidle()
+  if previous then previous() end
+  if remaining then
+    if caption then
+      caption_age = caption_age + 1
+      if caption_age >= caption[9] then clear_title() else render_title() end
+    end
+    elapsed = elapsed + 1
+    while timeline and point_index < #timeline and elapsed >= next_point do
+      point_index = point_index + 1
+      show_title(playback_player, timeline[point_index])
+      next_point = next_point + timeline[point_index][7]
+    end
+    remaining = remaining - 1
+    if remaining <= 0 then forge_ahead_camera_stop() end
+  end
+end
+local previous_init = Triggers.init
+function Triggers.init(restoring)
+  if previous_init then previous_init(restoring) end
+  forge_ahead_camera_stop()
+end
+");
+            foreach(var path in paths) {
+                var rows=new List<string>();bool valid=path.Points.Count>=2;
+                foreach(var v in path.Points) {
+                    short polygon=level.GetEnclosingPolygon(new Point(v.X,v.Y));
+                    if(polygon<0 || v.Z<=level.Polygons[polygon].FloorHeight || v.Z>=level.Polygons[polygon].CeilingHeight){valid=false;break;}
+                    rows.Add("{"+N(v.X)+","+N(v.Y)+","+N(v.Z)+","+polygon+","+v.Yaw+","+v.Pitch+","+v.Ticks+","+Q(v.Title)+","+v.TitleTicks+","+v.TitleX+","+v.TitleY+","+v.TitleSize+","+v.TitleRed+","+v.TitleGreen+","+v.TitleBlue+","+v.TitleFadeIn+","+v.TitleFadeOut+"}");
+                }
+                if(valid)s.Append("paths[").Append(Q(path.Name)).Append("] = {").Append(string.Join(",",rows)).Append("}\n");
+            }
+            return s.ToString();
+        }
+        public static void Save(Level level) {
+            if(!level.Chunks.ContainsKey(Tag))return;
+            var paths=Read(level);level.Chunks.TryGetValue(EmbeddedLua.Tag,out var data);
+            var scripts=EmbeddedLua.Read(data);
+            if(scripts.Any(s=>s.Name==Name&&!s.Text.StartsWith(Header)))throw new InvalidDataException("Reserved camera script name is in use.");
+            scripts.RemoveAll(s=>s.Name==Name);
+            if(paths.Count>0)scripts.Add(new EmbeddedLuaScript{Name=Name,Text=Generate(level,paths)});
+            if(scripts.Count==0)level.Chunks.Remove(EmbeddedLua.Tag);else level.Chunks[EmbeddedLua.Tag]=EmbeddedLua.Write(scripts);
+        }
+    }
+}

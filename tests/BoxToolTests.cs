@@ -71,6 +71,77 @@ class BoxToolTests
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         int passed = 0;
         void Test(string name, Action action) { action(); Console.WriteLine("PASS " + name); ++passed; }
+        Test("Camera paths persist generate and undo with geometry-resolved polygons", () => {
+            var level=new Level();Box(level,0,0,2048,2048);level.Polygons[0].FloorHeight=0;level.Polygons[0].CeilingHeight=2048;
+            var paths=new System.Collections.Generic.List<CameraPath>{new CameraPath{Name="Arrival"}};
+            paths[0].Points.Add(new CameraWaypoint{X=256,Y=256,Z=1024,Ticks=30});
+            paths[0].Points.Add(new CameraWaypoint{X=1536,Y=1536,Z=1024,Ticks=15});
+            var editor=Editor(level);editor.StoreCameraPaths(paths,"Camera path");
+            var loaded=new Level();loaded.Load(level.Save().Clone());
+            Check(CameraPaths.Read(loaded)[0].Points[1].X==1536,"Camera point lost on save");
+            var scripts=EmbeddedLua.Read(loaded.Chunks[EmbeddedLua.Tag]);
+            Check(scripts.Any(x=>x.Text.Contains("camera.path_points:new")&&x.Text.Contains("paths[\"Arrival\"]")),"Missing generated camera script");
+            editor.Undo();Check(CameraPaths.Read(level).Count==0,"Camera undo failed");editor.Redo();Check(CameraPaths.Read(level).Count==1,"Camera redo failed");
+            paths[0].Points[1].Z=3000;
+            Check(!CameraPaths.Generate(level,paths).Contains("paths[\"Arrival\"]"),"Invalid height exported");
+            paths[0].Points[1].Z=1024;paths[0].Points[0].Ticks=0;
+            bool rejected=false;try{CameraPaths.Write(level,paths);}catch(ArgumentException){rejected=true;}Check(rejected,"Invalid timing accepted");
+        });
+        Test("Camera paths survive repeated visual mode exports without shared buffers", () => {
+            var level=new Level();Box(level,0,0,2048,2048);level.Polygons[0].FloorHeight=0;level.Polygons[0].CeilingHeight=2048;
+            var path=new CameraPath{Name="Arrival"};path.Points.Add(new CameraWaypoint{X=256,Y=256,Z=1024});path.Points.Add(new CameraWaypoint{X=1024,Y=1024,Z=1024});
+            CameraPaths.Write(level,new System.Collections.Generic.List<CameraPath>{path});
+            for(int round=0;round<2;round++) {
+                var original=level.Save().Clone();var returned=EmbeddedLua.ForVisualMode(original,null);
+                returned.Chunks.Remove(CameraPaths.Tag);returned.Chunks.Remove(EmbeddedLua.Tag);
+                EmbeddedLua.RestoreAfterVisualMode(original,returned);
+                Check(returned.Chunks[CameraPaths.Tag].SequenceEqual(original.Chunks[CameraPaths.Tag]),"Visual mode lost camera metadata");
+                Check(!object.ReferenceEquals(returned.Chunks[CameraPaths.Tag],original.Chunks[CameraPaths.Tag]),"Camera metadata aliases original");
+                level=new Level();level.Load(returned);
+                Check(CameraPaths.Read(level)[0].Points.Count==2,"Waypoints lost after return");
+                Check(EmbeddedLua.Read(level.Save().Chunks[EmbeddedLua.Tag]).Any(x=>x.Text.Contains("paths[\"Arrival\"]")),"Camera playback lost after return");
+            }
+            var clean=new Wadfile.DirectoryEntry();var stale=level.Save().Clone();
+            EmbeddedLua.RestoreAfterVisualMode(clean,stale);Check(!stale.Chunks.ContainsKey(CameraPaths.Tag),"Unexpected runtime camera metadata retained");
+        });
+        Test("Camera tool left selects and right creates without moving geometry", () => {
+            var level=new Level();Box(level,0,0,2048,2048);
+            var editor=Editor(level);editor.StoreCameraPaths(new System.Collections.Generic.List<CameraPath>{new CameraPath()},"Create path");editor.CameraPathIndex=0;editor.Tool=Tool.CameraPath;
+            editor.ButtonPress(256,256,EditorModifiers.None);editor.ButtonRelease(256,256,EditorModifiers.None);
+            Check(editor.GetCameraPaths()[0].Points.Count==0,"Left click created a node");
+            editor.ButtonPress(256,256,EditorModifiers.RightClick);editor.ButtonRelease(256,256,EditorModifiers.RightClick);
+            Check(editor.GetCameraPaths()[0].Points.Count==1,"Right click did not create a node");
+            editor.ButtonPress(256,256,EditorModifiers.None);Check(editor.CameraPointIndex==0,"Left click failed to select");
+            int beforeDrag=editor.HistoryPosition; // Must not commit an active gesture.
+            editor.ClearDirty();editor.Motion(512,512,EditorModifiers.None);
+            Check(editor.Dirty && editor.RedrawAll,"Node motion did not invalidate the view");
+            Check(editor.HistoryPosition==beforeDrag,"History refresh committed a partial drag");
+            editor.Motion(512,512,EditorModifiers.None);Check(editor.HistoryPosition==beforeDrag,"Motion split the undo gesture");
+            editor.ButtonRelease(512,512,EditorModifiers.None);
+            Check(editor.GetCameraPaths()[0].Points[0].X==512,"Left drag failed");
+            editor.Undo();Check(editor.GetCameraPaths()[0].Points[0].X==256,"Node drag undo failed");
+        });
+        Test("Camera captions round trip upgrade v1 metadata and survive visual mode", () => {
+            var level=new Level();Box(level,0,0,2048,2048);level.Polygons[0].FloorHeight=0;level.Polygons[0].CeilingHeight=2048;
+            using(var stream=new System.IO.MemoryStream()) {
+                using(var w=new System.IO.BinaryWriter(stream,System.Text.Encoding.UTF8,true)) {
+                    w.Write(1);w.Write(1);w.Write("Legacy camera");w.Write(2);
+                    for(int j=0;j<2;j++){w.Write((short)(256+512*j));w.Write((short)256);w.Write((short)1024);w.Write((short)0);w.Write((short)0);w.Write(30);}
+                }
+                level.Chunks[CameraPaths.Tag]=stream.ToArray();
+            }
+            var paths=CameraPaths.Read(level);Check(paths[0].Points[0].Title==""&&paths[0].Points[0].TitleTicks==90,"Legacy paths not upgraded");
+            paths[0].Points[0].Title="Station \"Arrival\" \\ deck";paths[0].Points[0].TitleTicks=60;paths[0].Points[0].TitleX=25;paths[0].Points[0].TitleSize=200;paths[0].Points[0].TitleRed=64;paths[0].Points[0].TitleFadeIn=15;paths[0].Points[0].TitleFadeOut=20;
+            CameraPaths.Write(level,paths);var original=level.Save().Clone();
+            var returned=EmbeddedLua.ForVisualMode(original,null);returned.Chunks.Remove(CameraPaths.Tag);EmbeddedLua.RestoreAfterVisualMode(original,returned);
+            var loaded=new Level();loaded.Load(returned);var point=CameraPaths.Read(loaded)[0].Points[0];
+            Check(point.Title==paths[0].Points[0].Title&&point.TitleTicks==60,"Caption lost on visual mode return");
+            Check(point.TitleX==25&&point.TitleSize==200&&point.TitleRed==64&&point.TitleFadeIn==15&&point.TitleFadeOut==20,"Caption styling lost on save or visual mode return");
+            string lua=CameraPaths.Generate(loaded,CameraPaths.Read(loaded));
+            Check(lua.Contains("show_title")&&lua.Contains("overlays[slot].text"),"Caption playback not exported");
+            paths[0].Points[0].Title="bad\ncaption";bool rejected=false;
+            try{CameraPaths.Write(level,paths);}catch(ArgumentException){rejected=true;}Check(rejected,"Multiline caption accepted");
+        });
         byte[] PictureFixture(int depth, bool packed, byte[] pixels, int width = 8) {
             using var stream = new System.IO.MemoryStream(); using var writer = new BinaryWriterBE(stream);
             void W(int n) => writer.Write((ushort)n);

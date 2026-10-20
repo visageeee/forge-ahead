@@ -433,6 +433,7 @@ namespace Weland
         {
             UpdatePolygonWallReferences();
             PolygonLua.Save(this);
+            CameraPaths.Save(this);
             Wadfile.DirectoryEntry wad = new Wadfile.DirectoryEntry();
             wad.Chunks = Chunks;
             wad.Chunks[MapInfo.Tag] = SaveChunk(mapInfo);

@@ -30,7 +30,8 @@ namespace Weland
         Rotate,
         Scale,
         Ring,
-        BakeLighting
+        BakeLighting,
+        CameraPath
     }
 
     [Flags]
@@ -122,7 +123,7 @@ namespace Weland
             {
                 if (Level.TemporaryLineStartIndex != -1 && lineBefore != null) AbortLine();
                 historyGesture = false;
-                PlacingBakeLight=false; draggingBakeLight=false; ClearLightingPreview();
+                cameraDragging=false; PlacingBakeLight=false; draggingBakeLight=false; ClearLightingPreview();
                 CancelPaste();
                 CancelBox();
                 CancelSelectionBox();
@@ -1411,6 +1412,7 @@ namespace Weland
 
         public void ButtonPress(short X, short Y, EditorModifiers mods)
         {
+            if (Tool == Tool.CameraPath) { CameraPress(X,Y,mods); return; }
             if (Tool == Tool.BakeLighting || PlacingBakeLight) { BakeResultMessage=null; bakeClickConsumed=true; PlacingBakeLight=false; draggingBakeLight=!RightClick(mods); if (draggingBakeLight) { BakeLightPosition=new Point(X,Y); HasBakeLight=true; UpdateLightingPreview(); } else ClearLightingPreview(); return; }
             ClearLightingPreview();
             if (Pasting)
@@ -1629,6 +1631,7 @@ namespace Weland
 
         public void Motion(short X, short Y, EditorModifiers mods)
         {
+            if (Tool == Tool.CameraPath) { CameraMotion(X,Y); return; }
             if (bakeClickConsumed || PlacingBakeLight) { if(draggingBakeLight) { BakeLightPosition=new Point(X,Y); UpdateLightingPreview(); } return; }
             if (pasteConsumed) return;
             if (rightButtonMove || Tool == Tool.Move)
@@ -1798,6 +1801,7 @@ namespace Weland
 
         public void ButtonRelease(short X, short Y, EditorModifiers mods)
         {
+            if (Tool == Tool.CameraPath) { cameraDragging=false; historyGesture=false; CommitHistory(); CameraUpdated?.Invoke(); return; }
             if (bakeClickConsumed) { if(draggingBakeLight) {BakeLightPosition=new Point(X,Y);UpdateLightingPreview();} draggingBakeLight=false;bakeClickConsumed=false; return; }
             if (pasteConsumed) { pasteConsumed = false; historyGesture = false; return; }
             historyGesture = false;
@@ -2230,3 +2234,45 @@ namespace Weland
     }
 }
 
+
+namespace Weland {
+ public partial class Editor {
+    public int CameraPathIndex=-1, CameraPointIndex=-1;
+    public System.Action CameraUpdated;
+    bool cameraDragging;
+    public string CameraMessage="";
+    public System.Collections.Generic.List<CameraPath> GetCameraPaths()=>CameraPaths.Read(Level);
+    public void StoreCameraPaths(System.Collections.Generic.List<CameraPath> paths,string label) {
+        SetUndo(label); CameraPaths.Write(Level,paths); Changed=true;RedrawAll=true;CommitHistory();CameraUpdated?.Invoke();
+    }
+    void CameraPress(short x,short y,EditorModifiers mods) {
+        cameraDragging=false;
+        var paths=GetCameraPaths();if(CameraPathIndex<0||CameraPathIndex>=paths.Count)return;
+        var p=paths[CameraPathIndex];CameraMessage="";
+        if(RightClick(mods)) {
+            short poly=Level.GetEnclosingPolygon(new Point(x,y));
+            if(poly<0){CameraMessage="Place waypoints inside a polygon.";CameraUpdated?.Invoke();return;}
+            SetUndo("Add camera waypoint");
+            var polygon=Level.Polygons[poly];
+            p.Points.Add(new CameraWaypoint{X=x,Y=y,Z=(short)((polygon.FloorHeight+polygon.CeilingHeight)/2)});CameraPointIndex=p.Points.Count-1;
+            CameraPaths.Write(Level,paths);Changed=true;RedrawAll=true;CommitHistory();
+        } else {
+            CameraPointIndex=-1;double nearest=Math.Pow(8/Math.Max(Scale,0.001),2);
+            for(int i=0;i<p.Points.Count;i++) {
+                double dx=p.Points[i].X-x,dy=p.Points[i].Y-y,d=dx*dx+dy*dy;
+                if(d<=nearest){nearest=d;CameraPointIndex=i;}
+            }
+            if(CameraPointIndex>=0){SetUndo("Move camera waypoint");cameraDragging=true;historyGesture=true;}
+            RedrawAll=true;
+        }
+        CameraUpdated?.Invoke();
+    }
+    void CameraMotion(short x,short y){
+        if(!cameraDragging)return;
+        var paths=GetCameraPaths();if(CameraPathIndex<0||CameraPathIndex>=paths.Count||CameraPointIndex<0||CameraPointIndex>=paths[CameraPathIndex].Points.Count)return;
+        if(Level.GetEnclosingPolygon(new Point(x,y))<0)return;
+        var p=paths[CameraPathIndex].Points[CameraPointIndex];p.X=x;p.Y=y;
+        CameraPaths.Write(Level,paths);Changed=true;Dirty=true;RedrawAll=true;
+    }
+ }
+}

@@ -88,6 +88,7 @@ namespace Weland
             SetupRingOptions(sidebar);
             SetupSelectOptions(sidebar);
             SetupLightingOptions(sidebar);
+            SetupCameraOptions(sidebar);
             SetupLineOptions(sidebar);
             SetupHistory(sidebar);
             grid1.Attach(sidebar, 5, 0, 1, 1);

@@ -85,6 +85,7 @@ namespace Weland
         [Widget] RadioToolButton circleButton;
         [Widget] RadioToolButton ringButton;
         [Widget] RadioToolButton lightingButton;
+        [Widget] RadioToolButton cameraButton;
         [Widget] RadioToolButton fillButton;
         [Widget] RadioToolButton objectButton;
         [Widget] RadioToolButton annotationButton;
@@ -323,6 +324,9 @@ namespace Weland
 
         void SetupInputFocus(Gtk.Widget widget)
         {
+            // Some GTK composites expose internal native children without a
+            // managed wrapper (for example the color chooser's swatches).
+            if(widget == null)return;
             if(widget is Entry entry) {
                 entry.Activated+=(sender,args)=>ReleaseInputFocus();
             } else if(!(widget is TextView)) {
@@ -824,7 +828,7 @@ namespace Weland
             // Coalesce previews to the newest pointer sample. Painting keeps
             // every sample so fast strokes don't skip surfaces.
             bool dragging=(args.Event.State & (ModifierType.Button1Mask | ModifierType.Button2Mask | ModifierType.Button3Mask))!=0;
-            bool transform=editor.Tool==Tool.Select || editor.Tool==Tool.Move || editor.Tool==Tool.Rotate || editor.Tool==Tool.Scale || editor.Tool==Tool.Pan || (args.Event.State & ModifierType.Button2Mask)!=0;
+            bool transform=editor.Tool==Tool.CameraPath || editor.Tool==Tool.Select || editor.Tool==Tool.Move || editor.Tool==Tool.Rotate || editor.Tool==Tool.Scale || editor.Tool==Tool.Pan || (args.Event.State & ModifierType.Button2Mask)!=0;
             if(dragging && !transform) {
                 FlushPendingMotion();ProcessMotion(args.Event.X,args.Event.Y,args.Event.State);
             } else {
@@ -868,6 +872,7 @@ namespace Weland
         }
 
         Tool oldTool = Tool.Pan;
+        bool spacePanActive;
 
         static bool optionKey = false;
 
@@ -944,8 +949,9 @@ namespace Weland
             switch (args.Event.Key)
             {
                 case Gdk.Key.space:
-                    if (editor.Tool != Tool.Pan)
+                    if (!spacePanActive && editor.Tool != Tool.Pan)
                     {
+                        spacePanActive = true;
                         oldTool = editor.Tool;
                         editor.Tool = Tool.Pan;
                         drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
@@ -1145,8 +1151,9 @@ namespace Weland
         [GLib.ConnectBefore()]
         internal void OnSpecialKeyReleased(object obj, KeyReleaseEventArgs args)
         {
-            if (args.Event.Key == Gdk.Key.space)
+            if (args.Event.Key == Gdk.Key.space && spacePanActive)
             {
+                spacePanActive = false;
                 ChooseTool(oldTool);
                 oldTool = Tool.Pan;
                 args.RetVal = true;
@@ -1568,6 +1575,10 @@ namespace Weland
             {
                 ChooseTool(Tool.Box);
             }
+            else if (button == cameraButton)
+            {
+                ChooseTool(Tool.CameraPath);
+            }
             else if (button == lightingButton)
             {
                 ChooseTool(Tool.BakeLighting);
@@ -1846,6 +1857,7 @@ namespace Weland
         void ChooseTool(Tool tool)
         {
             editor.Tool = tool;
+            if (cameraOptions != null) { if (tool == Tool.CameraPath) cameraOptions.Show(); else cameraOptions.Hide(); }
             if (lightingOptions != null) { if (tool == Tool.BakeLighting) lightingOptions.Show(); else lightingOptions.Hide(); }
             if (lineOptions != null) { if (tool == Tool.Line) lineOptions.Show(); else lineOptions.Hide(); }
             if (selectOptions != null)
@@ -1876,7 +1888,7 @@ namespace Weland
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Fleur);
             }
-            else if (tool == Tool.BakeLighting || tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Ring || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
+            else if (tool == Tool.CameraPath || tool == Tool.BakeLighting || tool == Tool.Line || tool == Tool.Box || tool == Tool.Circle || tool == Tool.Ring || tool == Tool.Rotate || tool == Tool.Scale || tool == Tool.Object || tool == Tool.Annotation)
             {
                 drawingArea.Window.Cursor = new Cursor(Display.Default, CursorType.Cross);
             }

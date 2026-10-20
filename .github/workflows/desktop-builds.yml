@@ -2,10 +2,15 @@ name: Build Forge Ahead desktops
 on:
   push:
     branches: [weland-gtk3]
-    tags: ['v*']
+    tags: ['v*', '20*']
   pull_request:
     branches: [weland-gtk3]
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Build packages and prepare a draft release
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -67,7 +72,10 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && inputs.draft_release) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/weland-gtk3' && contains(github.event.head_commit.message, '[draft release]'))
     needs: package
     runs-on: ubuntu-24.04
     permissions:
@@ -79,13 +87,29 @@ jobs:
           pattern: forge-ahead-*
           path: downloads
           merge-multiple: true
-      - name: Attach packages to release
+      - name: Prepare draft release and attach packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
         run: |
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --title "Forge Ahead $RELEASE_TAG" --notes-file packaging/RELEASE-NOTES.md
+          if [[ "$RELEASE_REF" == refs/tags/* ]]; then
+            release_tag="$RELEASE_REF_NAME"
+          else
+            release_tag="$(tr -d '\r\n' < packaging/RELEASE-VERSION)"
           fi
-          gh release upload "$RELEASE_TAG" downloads/*.zip downloads/*.tar.gz --clobber
+          if [[ ! "$release_tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo 'Invalid release version' >&2
+            exit 1
+          fi
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" != true ]]; then
+              echo 'Refusing to replace assets on an already published release' >&2
+              exit 1
+            fi
+            gh release edit "$release_tag" --draft --notes-file packaging/RELEASE-NOTES.md
+          else
+            gh release create "$release_tag" --draft --target "$GITHUB_SHA" --title "Forge Ahead $release_tag" --notes-file packaging/RELEASE-NOTES.md
+          fi
+          gh release upload "$release_tag" downloads/*.zip downloads/*.tar.gz --clobber

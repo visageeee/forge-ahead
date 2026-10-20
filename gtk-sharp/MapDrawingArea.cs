@@ -348,6 +348,26 @@ namespace Weland
                     drawer.DrawLine(selectedLineColor, new Drawer.Point(center.X, center.Y - 6), new Drawer.Point(center.X, center.Y + 6));
                 }
 
+                if (Editor != null && Editor.Tool == Tool.CameraPath) {
+                    var paths=Editor.GetCameraPaths();
+                    if(Editor.CameraPathIndex>=0 && Editor.CameraPathIndex<paths.Count) {
+                        var points=paths[Editor.CameraPathIndex].Points;
+                        for(int i=0;i<points.Count;i++) {
+                            var v=points[i];var a=Transform.ToScreenPoint(new Point(v.X,v.Y));
+                            var color=i==Editor.CameraPointIndex ? selectedLineColor : new Drawer.Color(0,.8,1);
+                            if(i>0){var b=points[i-1];drawer.DrawLine(color,Transform.ToScreenPoint(new Point(b.X,b.Y)),a);}
+                            drawer.DrawLine(color,new Drawer.Point(a.X-5,a.Y-5),new Drawer.Point(a.X+5,a.Y+5));
+                            drawer.DrawLine(color,new Drawer.Point(a.X-5,a.Y+5),new Drawer.Point(a.X+5,a.Y-5));
+                            // Screen-sized arrows use the same yaw convention as map objects.
+                            double angle=v.Yaw*Math.PI/180, dx=Math.Cos(angle),dy=Math.Sin(angle);
+                            var tip=new Drawer.Point(a.X+20*dx,a.Y+20*dy);
+                            drawer.DrawLine(color,a,tip);
+                            drawer.DrawLine(color,tip,new Drawer.Point(tip.X-6*dx-4*dy,tip.Y-6*dy+4*dx));
+                            drawer.DrawLine(color,tip,new Drawer.Point(tip.X-6*dx+4*dy,tip.Y-6*dy-4*dx));
+                            cr.SetSourceRGB(0,.8,1);cr.MoveTo(a.X+7,a.Y-7);cr.ShowText((i+1).ToString());
+                        }
+                    }
+                }
                 if (Editor != null && Editor.Tool == Tool.BakeLighting && Editor.HasBakeLight)
                 {
                     foreach (var piece in Editor.LightingPreview)

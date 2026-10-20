@@ -346,3 +346,48 @@ Use Once per level to prevent re-entry from restarting the animation. Sprintatho
 uses the declared path for precomputed lighting blends; editor-baked polygon
 geometry is unchanged. Visible Sun and Landscape Light Shafts still respect the
 player's graphics settings. In-game visual validation remains necessary.
+
+### Camera paths
+
+Choose the **Camera paths** toolbar tool (camera icon). Create a named path, then right-click
+inside polygons to place numbered waypoints. Left-click selects a node; left-drag
+moves it. Small arrows
+on the waypoints show their facing direction. Choose a
+waypoint in the list to edit absolute height (WU), facing, pitch, and seconds
+to the next point. Facing and pitch use sliders; value changes apply immediately.
+The final point's time is a hold before returning to the
+player. Earlier/Later reorder points; all edits support undo.
+
+Use **Camera → Play camera path** in a polygon Lua trigger and enter the exact
+path name. **Stop camera path** returns the view immediately. Renaming a path
+requires updating trigger references. Paths are stored per map and compiled
+into embedded Lua automatically. Geometry and polygon IDs are resolved on save.
+Paths with invalid waypoint positions/heights cannot play. The **Check path** button samples
+segments to warn about leaving the open map volume; this is not a full collision
+test, especially for overlapping rooms or narrow walls.
+
+This first version uses straight segments and linear angles. Test in game;
+player movement is not frozen, playback is not resumed from saved games, and
+there is no in-editor 3D playback, easing, look-at target, or looping yet.
+
+Waypoint titles/captions appear on arrival and clear on expiry, stop, or
+completion. Caption controls provide centre X/Y as screen percentages, font
+size (50–400%), RGB color, and fade-in/out seconds. Duration includes both
+fades; overlapping fades blend without a hold. These controls require the
+Sprintathon styled-caption engine patch (`player:caption`). Captions use a
+separate renderer, so they work independently of the active HUD.
+
+Older engines fall back to ordinary text in the last script HUD overlay;
+position, size, RGB and fading are unavailable there. Reserve that slot if using
+the fallback. Existing v1/v2 camera paths load with default styling.
+
+Camera waypoint drags now redraw live, coalesce pointer events, and retain one
+undo step for the whole drag. Expensive whole-path checking runs only when
+**Check path** is clicked, rather than during sidebar refreshes.
+
+Typing spaces in sidebar text fields no longer releases the temporary Pan tool:
+Space only restores a previous tool when it actually started a pan shortcut.
+
+The Camera Paths sidebar has **Waypoints** and **Captions** tabs. Select a node,
+then open **Captions** to edit its text, duration, position, size, color and fades.
+The path and waypoint selectors remain visible above both tabs.
